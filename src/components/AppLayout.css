@@ -1,0 +1,10 @@
+.word-editor-shell {
+  min-height: 100vh;
+  background: #e5e7eb;
+}
+
+@media print {
+  .word-editor-shell {
+    background: #fff;
+  }
+}

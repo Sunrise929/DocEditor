@@ -1,0 +1,108 @@
+.word-titlebar {
+  position: sticky;
+  z-index: 21;
+  top: 0;
+  display: flex;
+  min-width: 620px;
+  height: 42px;
+  align-items: center;
+  background: #185abd;
+  padding: 0 14px;
+  color: #fff;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.word-titlebar-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.word-autosave {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: 4px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.word-autosave-switch {
+  position: relative;
+  display: inline-flex;
+  width: 34px;
+  height: 18px;
+  align-items: center;
+  border: 1px solid rgb(255 255 255 / 76%);
+  border-radius: 999px;
+  background: rgb(0 0 0 / 18%);
+  opacity: 0.82;
+}
+
+.word-autosave-thumb {
+  width: 12px;
+  height: 12px;
+  margin-left: 2px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 30%);
+}
+
+.word-titlebar-divider {
+  width: 1px;
+  height: 20px;
+  margin: 0 5px;
+  background: rgb(255 255 255 / 28%);
+}
+
+.word-titlebar-button {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.word-titlebar-button:hover:not(:disabled),
+.word-titlebar-button:focus-visible {
+  background: rgb(255 255 255 / 16%);
+  outline: none;
+}
+
+.word-titlebar-button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.word-titlebar-button svg {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+
+.word-document-title {
+  position: absolute;
+  left: 50%;
+  overflow: hidden;
+  max-width: 40%;
+  transform: translateX(-50%);
+  font-size: 13px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media print {
+  .word-titlebar {
+    display: none;
+  }
+}
