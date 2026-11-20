@@ -27,8 +27,7 @@
 }
 
 .word-ribbon-tab:hover {
-  background: #f3f6fb;
-  color: #185abd;
+  background: transparent;
 }
 
 .word-ribbon-tab.is-active {
@@ -36,14 +35,22 @@
   font-weight: 600;
 }
 
-.word-ribbon-tab.is-active::after {
+.word-ribbon-tab::after {
   position: absolute;
   right: 10px;
   bottom: -1px;
   left: 10px;
-  height: 2px;
-  background: #185abd;
+  height: 3px;
+  background: transparent;
   content: "";
+}
+
+.word-ribbon-tab:hover::after {
+  background: #b6b8bb;
+}
+
+.word-ribbon-tab.is-active::after {
+  background: #185abd;
 }
 
 .word-ribbon-tab:focus-visible {

@@ -7,6 +7,7 @@ import { canJoin } from '@tiptap/pm/transform'
 import { EditorContent, useEditor } from '@tiptap/vue-3'
 import { reactive, ref } from 'vue'
 import WordRulers from '../WordRulers/WordRulers.vue'
+import { adjustIndent, indentDefaults, type IndentHandle, type ParagraphIndent } from '../WordRulers/paragraphIndent'
 
 defineOptions({ name: 'WordEditor' })
 
@@ -41,6 +42,48 @@ const DEFAULT_PAGE_MARGINS: PageMargins = {
 
 const currentPageNumber = ref(1)
 const currentPageMargins = reactive<PageMargins>({ ...DEFAULT_PAGE_MARGINS })
+const paragraphIndent = ref<ParagraphIndent | null>(null)
+const indentKeys = Object.keys(indentDefaults) as (keyof ParagraphIndent)[]
+
+const ParagraphIndentation = Extension.create({
+  name: 'paragraphIndentation',
+  addGlobalAttributes() {
+    const properties = {
+      indentLeft: ['data-indent-left', 'margin-left'],
+      indentRight: ['data-indent-right', 'margin-right'],
+      firstLineOffset: ['data-first-line-offset', 'text-indent'],
+    } as const
+    return [{
+      types: ['paragraph'],
+      attributes: Object.fromEntries(indentKeys.map(key => {
+        const [attribute, property] = properties[key]
+        return [key, {
+          default: 0,
+          parseHTML: (element: HTMLElement) => marginValue(element.getAttribute(attribute), 0),
+          renderHTML: (attrs: Record<string, unknown>) => {
+            const value = marginValue(attrs[key], 0)
+            return value ? { [attribute]: value, style: `${property}: ${value}cm` } : {}
+          },
+        }]
+      })),
+    }]
+  },
+})
+
+const readIndent = (node: ProseMirrorNode): ParagraphIndent => ({
+  indentLeft: marginValue(node.attrs.indentLeft, 0),
+  indentRight: marginValue(node.attrs.indentRight, 0),
+  firstLineOffset: marginValue(node.attrs.firstLineOffset, 0),
+})
+
+const syncParagraphIndent = (instance: Editor) => {
+  const { $from } = instance.state.selection
+  const next = $from.parent.type.name === 'paragraph' ? readIndent($from.parent) : null
+  const previous = paragraphIndent.value
+  if (next ? !previous || indentKeys.some(key => next[key] !== previous[key]) : previous) {
+    paragraphIndent.value = next
+  }
+}
 
 const marginValue = (value: unknown, fallback: number) => {
   const parsed = Number(value)
@@ -342,65 +385,6 @@ const Pagination = Extension.create({
             return true
           }
 
-          const splitOverflowingTextBlock = (
-            pageIndex: number,
-            entry: PageEntry,
-            contentElement: HTMLElement,
-          ) => {
-            const { rect: contentRect, bottom: contentBottom } =
-              contentBounds(contentElement)
-            const childElements = Array.from(
-              contentElement.children,
-            ) as HTMLElement[]
-            let childOffset = 0
-
-            for (let index = 0; index < entry.node.childCount; index += 1) {
-              const childNode = entry.node.child(index)
-              const childElement = childElements[index]
-              const childRect = childElement?.getBoundingClientRect()
-
-              if (!childElement || !childRect) return false
-
-              const crossesPageBottom =
-                childRect.top < contentBottom - 2 &&
-                childRect.bottom > contentBottom + 1
-
-              if (!crossesPageBottom || !childNode.isTextblock) {
-                childOffset += childNode.nodeSize
-                continue
-              }
-
-              const childStyle = window.getComputedStyle(childElement)
-              const positionAtBottom = editorView.posAtCoords({
-                left: Math.min(childRect.right - 8, contentRect.right - 8),
-                top: contentBottom - pixels(childStyle.marginBottom) - 4,
-              })
-
-              if (!positionAtBottom) return false
-
-              const childNodeStart = entry.pos + 1 + childOffset
-              const childNodeEnd = childNodeStart + childNode.nodeSize
-              const splitPosition = positionAtBottom.pos
-
-              if (
-                splitPosition <= childNodeStart + 1 ||
-                splitPosition >= childNodeEnd - 1
-              ) {
-                return false
-              }
-
-              try {
-                dispatchPagination(editorView.state.tr.split(splitPosition))
-                requestRun(pageIndex, pageIndex + 1)
-                return true
-              } catch {
-                return false
-              }
-            }
-
-            return false
-          }
-
           const moveOverflowForward = (
             pageIndex: number,
             entries: PageEntry[],
@@ -419,8 +403,7 @@ const Pagination = Extension.create({
 
             if (firstOverflowingIndex < 0) return false
 
-            // Keep at least one block on every page. A block that is taller than
-            // the printable area is split first by splitOverflowingTextBlock().
+            // Keep an oversized first block on this page to avoid repeat overflow.
             const movingFromIndex = Math.max(1, firstOverflowingIndex)
             let movingOffset = 0
 
@@ -517,54 +500,7 @@ const Pagination = Extension.create({
               movingSize += next.node.child(index).nodeSize
             }
 
-            if (movingSize === 0) {
-              const candidateNode = next.node.firstChild
-              const candidateElement = candidateElements[0]
-
-              if (!candidateNode?.isTextblock || !candidateElement) return false
-
-              const candidateStyle = window.getComputedStyle(candidateElement)
-              const lineHeight =
-                pixels(candidateStyle.lineHeight) ||
-                pixels(candidateStyle.fontSize) * 1.75
-              const usableHeight =
-                availableHeight - pixels(candidateStyle.marginBottom) - 4
-
-              if (usableHeight < lineHeight) return false
-
-              const candidateRect = candidateElement.getBoundingClientRect()
-              const nextRect = nextContent.getBoundingClientRect()
-              const positionAtAvailableBottom = editorView.posAtCoords({
-                left: Math.min(candidateRect.right - 8, nextRect.right - 8),
-                top: Math.min(
-                  candidateRect.bottom - 4,
-                  candidateRect.top + usableHeight,
-                ),
-              })
-
-              if (!positionAtAvailableBottom) return false
-
-              const candidateStart = next.pos + 1
-              const candidateEnd = candidateStart + candidateNode.nodeSize
-              const splitPosition = positionAtAvailableBottom.pos
-
-              if (
-                splitPosition <= candidateStart + 1 ||
-                splitPosition >= candidateEnd - 1
-              ) {
-                return false
-              }
-
-              try {
-                dispatchPagination(editorView.state.tr.split(splitPosition))
-                backwardFlowPages.add(pageIndex)
-                backwardFlowPages.add(pageIndex + 1)
-                requestRun(pageIndex, pageIndex + 1)
-                return true
-              } catch {
-                return false
-              }
-            }
+            if (movingSize === 0) return false
 
             const movingFrom = next.pos + 1
             const movingTo = movingFrom + movingSize
@@ -629,10 +565,7 @@ const Pagination = Extension.create({
             )
 
             if (isOverflowing) {
-              if (
-                splitOverflowingTextBlock(pageIndex, current, contentElement) ||
-                moveOverflowForward(pageIndex, entries, contentElement)
-              ) {
+              if (moveOverflowForward(pageIndex, entries, contentElement)) {
                 return
               }
             } else if (backwardFlowPages.has(pageIndex)) {
@@ -688,6 +621,7 @@ const Pagination = Extension.create({
 const editor = useEditor({
   extensions: [
     StarterKit.configure({ document: false }),
+    ParagraphIndentation,
     PaginatedDocument,
     Page,
     Pagination,
@@ -708,12 +642,45 @@ const editor = useEditor({
       spellcheck: 'true',
     },
   },
-  onCreate: ({ editor: editorInstance }) => syncCurrentPage(editorInstance),
+  onCreate: ({ editor: editorInstance }) => {
+    syncCurrentPage(editorInstance)
+    syncParagraphIndent(editorInstance)
+  },
   onSelectionUpdate: ({ editor: editorInstance }) =>
     syncCurrentPage(editorInstance),
-  onTransaction: ({ editor: editorInstance }) =>
-    syncCurrentPage(editorInstance),
+  onTransaction: ({ editor: editorInstance }) => {
+    syncCurrentPage(editorInstance)
+    syncParagraphIndent(editorInstance)
+  },
 })
+
+const updateParagraphIndent = (handle: IndentHandle, delta: number) => {
+  const instance = editor.value
+  if (!instance || !delta) return
+  const { doc, selection, tr } = instance.state
+  const update = (node: ProseMirrorNode, pos: number) => {
+    if (node.type.name !== 'paragraph') return
+    const page = pageAtPosition(doc, pos + 1)
+    if (!page) return false
+    const { marginLeft, marginRight } = pageMarginsFromNode(page.node)
+    const before = readIndent(node)
+    const after = adjustIndent(
+      before, handle, delta, (210 - marginLeft - marginRight) / 10,
+      marginLeft / 10, marginRight / 10,
+    )
+    if (indentKeys.some(key => before[key] !== after[key])) {
+      tr.setNodeMarkup(pos, undefined, { ...node.attrs, ...after })
+    }
+    return false
+  }
+  if (selection.empty) {
+    const { $from } = selection
+    if ($from.parent.type.name === 'paragraph') update($from.parent, $from.before())
+  } else {
+    doc.nodesBetween(selection.from, selection.to, update)
+  }
+  if (tr.docChanged) instance.view.dispatch(tr)
+}
 
 const updateCurrentPageMargin = (key: MarginKey, value: number) => {
   const editorInstance = editor.value
@@ -758,7 +725,9 @@ defineExpose({ getJSON, undo, redo })
       v-if="showRulers"
       :current-page-number="currentPageNumber"
       :margins="currentPageMargins"
+      :paragraph-indent="paragraphIndent"
       @margin-change="updateCurrentPageMargin"
+      @indent-change="updateParagraphIndent"
     />
 
     <main class="document-workspace">

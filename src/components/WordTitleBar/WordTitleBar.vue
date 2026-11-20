@@ -63,9 +63,8 @@ const emit = defineEmits<{
           <path d="M19 12h-8a6 6 0 0 0-6 6" />
         </svg>
       </button>
+      
     </div>
-
-    <div class="word-document-title">文档编辑器</div>
   </header>
 </template>
 
