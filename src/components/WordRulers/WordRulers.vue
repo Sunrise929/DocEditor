@@ -1,20 +1,17 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue'
+import { MIN_CONTENT_HEIGHT_MM, MIN_CONTENT_WIDTH_MM, type PageMargins } from '../WordEditor/pageGeometry'
 import { adjustIndent, type IndentHandle, type ParagraphIndent } from './paragraphIndent'
 
 defineOptions({ name: 'WordRulers' })
-
-type PageMargins = {
-  marginTop: number
-  marginRight: number
-  marginBottom: number
-  marginLeft: number
-}
 
 type MarginKey = keyof PageMargins
 
 const props = defineProps<{
   currentPageNumber: number
+  pageWidth: number
+  pageHeight: number
+  pageOffset: number
   margins: PageMargins
   paragraphIndent: ParagraphIndent | null
 }>()
@@ -24,21 +21,15 @@ const emit = defineEmits<{
   indentChange: [handle: IndentHandle, delta: number]
 }>()
 
-const PAGE_WIDTH_MM = 210
-const PAGE_HEIGHT_MM = 297
-const MIN_CONTENT_WIDTH_MM = 20
-const MIN_CONTENT_HEIGHT_MM = 5
-
-const horizontalTicks = Array.from({ length: 85 }, (_, index) => index * 2.5)
-const horizontalPageTicks = Array.from(
-  { length: 169 },
-  (_, index) => (index - 84) * 2.5,
-)
-const verticalTicks = Array.from({ length: 119 }, (_, index) => index * 2.5)
-const verticalPageTicks = Array.from(
-  { length: 241 },
-  (_, index) => (index - 120) * 2.5,
-)
+const rulerTicks = (length: number, includeNegative = false) => {
+  const count = Math.floor(length / 2.5)
+  const start = includeNegative ? -count : 0
+  return Array.from({ length: count - start + 1 }, (_, index) => (start + index) * 2.5)
+}
+const horizontalTicks = computed(() => rulerTicks(props.pageWidth))
+const horizontalPageTicks = computed(() => rulerTicks(props.pageWidth, true))
+const verticalTicks = computed(() => rulerTicks(props.pageHeight))
+const verticalPageTicks = computed(() => rulerTicks(props.pageHeight, true))
 
 const horizontalRuler = ref<HTMLElement | null>(null)
 const verticalRuler = ref<HTMLElement | null>(null)
@@ -49,7 +40,7 @@ const indentHandles = [
   { key: 'left', label: '左缩进' },
   { key: 'right', label: '右缩进' },
 ] as const
-const indentWidth = computed(() => (PAGE_WIDTH_MM - props.margins.marginLeft - props.margins.marginRight) / 10)
+const indentWidth = computed(() => (props.pageWidth - props.margins.marginLeft - props.margins.marginRight) / 10)
 const indentDrag = ref<{ handle: IndentHandle; pointerId: number; startX: number; delta: number; precise: boolean; handleBottomOffset: number } | null>(null)
 const indentGuideHeight = ref(0)
 let replayDrag: ((precise: boolean) => void) | undefined
@@ -89,7 +80,7 @@ const indentCoordinate = (handle: IndentHandle) => {
 }
 
 const indentPosition = (handle: IndentHandle) =>
-  percentage(indentCoordinate(handle), PAGE_WIDTH_MM)
+  percentage(indentCoordinate(handle), props.pageWidth)
 
 const startIndentDrag = (handle: IndentHandle, event: PointerEvent) => {
   const ruler = horizontalRuler.value
@@ -115,7 +106,7 @@ const moveIndentDrag = (event: PointerEvent, precise = event.altKey) => {
   const direction = drag.handle === 'right' ? -1 : 1
   replayDrag = next => moveIndentDrag(event, next)
   drag.precise = precise
-  const delta = direction * (event.clientX - drag.startX) / rect.width * (PAGE_WIDTH_MM / 10)
+  const delta = direction * (event.clientX - drag.startX) / rect.width * (props.pageWidth / 10)
   drag.delta = precise ? delta : Math.round(delta * 4) / 4
 }
 
@@ -137,34 +128,30 @@ const cancelIndentDrag = (event: PointerEvent) => {
   if (indentDrag.value?.pointerId === event.pointerId) stopIndentDrag()
 }
 
-const verticalRulerPosition = computed(() => {
-  const precedingPages = props.currentPageNumber - 1
-
-  return {
-    top: `calc(62px + ${precedingPages * PAGE_HEIGHT_MM}mm + ${precedingPages * 24}px)`,
-  }
-})
+const verticalRulerPosition = computed(() => ({
+  top: `calc(var(--horizontal-ruler-height) + var(--document-padding-block) + ${props.pageOffset}px)`,
+}))
 
 const percentage = (value: number, total: number) =>
   `${(value / total) * 100}%`
 
 const isHorizontalBoundaryTick = (tick: number) => {
   const contentWidth =
-    PAGE_WIDTH_MM - props.margins.marginLeft - props.margins.marginRight
+    props.pageWidth - props.margins.marginLeft - props.margins.marginRight
 
   return Math.abs(tick) < 0.001 || Math.abs(tick - contentWidth) < 0.001
 }
 
 const isVerticalBoundaryTick = (tick: number) => {
   const contentHeight =
-    PAGE_HEIGHT_MM - props.margins.marginTop - props.margins.marginBottom
+    props.pageHeight - props.margins.marginTop - props.margins.marginBottom
 
   return Math.abs(tick) < 0.001 || Math.abs(tick - contentHeight) < 0.001
 }
 
 const verticalContentPercentage = (tick: number) => {
   const contentHeight =
-    PAGE_HEIGHT_MM - props.margins.marginTop - props.margins.marginBottom
+    props.pageHeight - props.margins.marginTop - props.margins.marginBottom
 
   return percentage(tick, contentHeight)
 }
@@ -177,7 +164,7 @@ const horizontalPrecision = computed(() =>
 const verticalPrecision = computed(() => Boolean(marginGuide.value?.precise && !marginGuide.value.horizontal))
 
 const precisionSegments = (horizontal: boolean) => {
-  const total = horizontal ? PAGE_WIDTH_MM : PAGE_HEIGHT_MM
+  const total = horizontal ? props.pageWidth : props.pageHeight
   const { marginLeft, marginRight, marginTop, marginBottom } = props.margins
   const start = horizontal ? marginLeft : marginTop
   const end = total - (horizontal ? marginRight : marginBottom)
@@ -202,7 +189,7 @@ const precisionSegments = (horizontal: boolean) => {
 const marginGuidePosition = computed(() => {
   const guide = marginGuide.value
   if (!guide) return '0%'
-  const total = guide.horizontal ? PAGE_WIDTH_MM : PAGE_HEIGHT_MM
+  const total = guide.horizontal ? props.pageWidth : props.pageHeight
   const margin = props.margins[guide.key]
   const farEdge = guide.key === 'marginRight' || guide.key === 'marginBottom'
   return percentage(farEdge ? total - margin : margin, total)
@@ -227,7 +214,7 @@ const startMarginDrag = (key: MarginKey, event: PointerEvent) => {
   const move = (pointerEvent: PointerEvent, precise = pointerEvent.altKey) => {
     if (pointerEvent.pointerId !== event.pointerId) return
     const rect = ruler.getBoundingClientRect()
-    const pageSize = horizontal ? PAGE_WIDTH_MM : PAGE_HEIGHT_MM
+    const pageSize = horizontal ? props.pageWidth : props.pageHeight
     const pointerPosition = horizontal
       ? pointerEvent.clientX - rect.left
       : pointerEvent.clientY - rect.top
@@ -310,11 +297,11 @@ onBeforeUnmount(() => {
     >
       <span
         class="word-ruler-margin-shade is-start"
-        :style="{ width: percentage(margins.marginLeft, PAGE_WIDTH_MM) }"
+        :style="{ width: percentage(margins.marginLeft, pageWidth) }"
       />
       <span
         class="word-ruler-margin-shade is-end"
-        :style="{ width: percentage(margins.marginRight, PAGE_WIDTH_MM) }"
+        :style="{ width: percentage(margins.marginRight, pageWidth) }"
       />
 
       <span class="word-horizontal-ruler-page-ticks">
@@ -327,7 +314,7 @@ onBeforeUnmount(() => {
             'is-boundary': isHorizontalBoundaryTick(tick),
           }"
           :style="{
-            left: `calc(${percentage(margins.marginLeft, PAGE_WIDTH_MM)} + ${tick}mm)`,
+            left: `calc(${percentage(margins.marginLeft, pageWidth)} + ${tick}mm)`,
           }"
         />
       </span>
@@ -335,8 +322,8 @@ onBeforeUnmount(() => {
       <span
         class="word-horizontal-ruler-scale"
         :style="{
-          left: percentage(margins.marginLeft, PAGE_WIDTH_MM),
-          right: percentage(margins.marginRight, PAGE_WIDTH_MM),
+          left: percentage(margins.marginLeft, pageWidth),
+          right: percentage(margins.marginRight, pageWidth),
         }"
       >
         <span
@@ -360,7 +347,7 @@ onBeforeUnmount(() => {
       <button
         type="button"
         class="word-ruler-boundary is-horizontal is-start"
-        :style="{ left: percentage(margins.marginLeft, PAGE_WIDTH_MM) }"
+        :style="{ left: percentage(margins.marginLeft, pageWidth) }"
         :aria-label="`调整第 ${currentPageNumber} 页左边距`"
         title="拖动调整左边距"
         @pointerdown="startMarginDrag('marginLeft', $event)"
@@ -369,7 +356,7 @@ onBeforeUnmount(() => {
         type="button"
         class="word-ruler-boundary is-horizontal is-end"
         :style="{
-          left: percentage(PAGE_WIDTH_MM - margins.marginRight, PAGE_WIDTH_MM),
+          left: percentage(pageWidth - margins.marginRight, pageWidth),
         }"
         :aria-label="`调整第 ${currentPageNumber} 页右边距`"
         title="拖动调整右边距"
@@ -420,11 +407,11 @@ onBeforeUnmount(() => {
       :class="{ 'is-precision': verticalPrecision }">
       <span
         class="word-ruler-margin-shade is-start"
-        :style="{ height: percentage(margins.marginTop, PAGE_HEIGHT_MM) }"
+        :style="{ height: percentage(margins.marginTop, pageHeight) }"
       />
       <span
         class="word-ruler-margin-shade is-end"
-        :style="{ height: percentage(margins.marginBottom, PAGE_HEIGHT_MM) }"
+        :style="{ height: percentage(margins.marginBottom, pageHeight) }"
       />
 
       <span class="word-vertical-ruler-page-ticks">
@@ -437,7 +424,7 @@ onBeforeUnmount(() => {
             'is-boundary': isVerticalBoundaryTick(tick),
           }"
           :style="{
-            top: `calc(${percentage(margins.marginTop, PAGE_HEIGHT_MM)} + ${percentage(tick, PAGE_HEIGHT_MM)})`,
+            top: `calc(${percentage(margins.marginTop, pageHeight)} + ${percentage(tick, pageHeight)})`,
           }"
         />
       </span>
@@ -445,8 +432,8 @@ onBeforeUnmount(() => {
       <span
         class="word-vertical-ruler-scale"
         :style="{
-          top: percentage(margins.marginTop, PAGE_HEIGHT_MM),
-          bottom: percentage(margins.marginBottom, PAGE_HEIGHT_MM),
+          top: percentage(margins.marginTop, pageHeight),
+          bottom: percentage(margins.marginBottom, pageHeight),
         }"
       >
         <span
@@ -470,7 +457,7 @@ onBeforeUnmount(() => {
       <button
         type="button"
         class="word-ruler-boundary is-vertical is-start"
-        :style="{ top: percentage(margins.marginTop, PAGE_HEIGHT_MM) }"
+        :style="{ top: percentage(margins.marginTop, pageHeight) }"
         :aria-label="`调整第 ${currentPageNumber} 页上边距`"
         title="拖动调整上边距"
         @pointerdown="startMarginDrag('marginTop', $event)"
@@ -479,7 +466,7 @@ onBeforeUnmount(() => {
         type="button"
         class="word-ruler-boundary is-vertical is-end"
         :style="{
-          top: percentage(PAGE_HEIGHT_MM - margins.marginBottom, PAGE_HEIGHT_MM),
+          top: percentage(pageHeight - margins.marginBottom, pageHeight),
         }"
         :aria-label="`调整第 ${currentPageNumber} 页下边距`"
         title="拖动调整下边距"

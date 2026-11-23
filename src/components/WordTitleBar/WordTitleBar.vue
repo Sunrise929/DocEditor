@@ -1,4 +1,8 @@
 <script setup lang="ts">
+import { ElButton, ElSwitch } from 'element-plus'
+import 'element-plus/es/components/button/style/css'
+import 'element-plus/es/components/switch/style/css'
+
 defineOptions({ name: 'WordTitleBar' })
 
 const emit = defineEmits<{
@@ -13,20 +17,20 @@ const emit = defineEmits<{
     <div class="word-titlebar-actions">
       <div class="word-autosave" title="自动保存功能暂未启用">
         <span>自动保存</span>
-        <span
+        <ElSwitch
           class="word-autosave-switch"
-          role="switch"
-          aria-checked="false"
-          aria-disabled="true"
-        >
-          <span class="word-autosave-thumb" />
-        </span>
+          :model-value="false"
+          :width="34"
+          aria-label="自动保存"
+          size="small"
+          disabled
+        />
       </div>
 
       <span class="word-titlebar-divider" aria-hidden="true" />
 
-      <button
-        type="button"
+      <ElButton
+        text
         class="word-titlebar-button"
         title="保存"
         aria-label="保存"
@@ -36,10 +40,10 @@ const emit = defineEmits<{
           <path d="M5 3h12l2 2v16H5z" />
           <path d="M8 3v6h8V3M8 21v-8h8v8" />
         </svg>
-      </button>
+      </ElButton>
 
-      <button
-        type="button"
+      <ElButton
+        text
         class="word-titlebar-button"
         title="撤销"
         aria-label="撤销"
@@ -49,10 +53,10 @@ const emit = defineEmits<{
           <path d="M9 7 4 12l5 5" />
           <path d="M5 12h8a6 6 0 0 1 6 6" />
         </svg>
-      </button>
+      </ElButton>
 
-      <button
-        type="button"
+      <ElButton
+        text
         class="word-titlebar-button"
         title="恢复"
         aria-label="恢复"
@@ -62,7 +66,7 @@ const emit = defineEmits<{
           <path d="m15 7 5 5-5 5" />
           <path d="M19 12h-8a6 6 0 0 0-6 6" />
         </svg>
-      </button>
+      </ElButton>
       
     </div>
   </header>

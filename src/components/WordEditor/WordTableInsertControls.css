@@ -1,0 +1,45 @@
+.word-table-insert-guide {
+  position: fixed;
+  z-index: 16;
+  border-color: #4d79b1;
+  pointer-events: none;
+}
+
+.word-table-insert-guide.is-row {
+  border-top: 1px solid #4d79b1;
+}
+
+.word-table-insert-guide.is-column {
+  border-left: 1px solid #4d79b1;
+}
+
+.word-table-insert-button.el-button {
+  --el-button-text-color: #185abd;
+  --el-button-border-color: #4d79b1;
+  --el-button-hover-text-color: #fff;
+  --el-button-hover-bg-color: #185abd;
+  --el-button-hover-border-color: #185abd;
+
+  position: fixed;
+  z-index: 17;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  padding: 0;
+  transform: translate(-50%, -50%);
+}
+
+.word-table-insert-plus {
+  width: 8px;
+  height: 8px;
+  background:
+    linear-gradient(currentColor 0 0) center / 100% 1px no-repeat,
+    linear-gradient(currentColor 0 0) center / 1px 100% no-repeat;
+}
+
+@media print {
+  .word-table-insert-guide,
+  .word-table-insert-button.el-button {
+    display: none;
+  }
+}

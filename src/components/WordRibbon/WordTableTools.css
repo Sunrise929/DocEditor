@@ -1,0 +1,119 @@
+.word-table-icon {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 30px;
+  flex: none;
+  overflow: hidden;
+  border: 2px solid currentColor;
+  border-radius: 2px;
+  background: var(--word-table-icon-header-color, #e5e7eb);
+  color: #394150;
+}
+
+.word-table-icon::after {
+  position: absolute;
+  inset: 14.2857% 0 0;
+  border-top: 1px solid currentColor;
+  background:
+    linear-gradient(currentColor 0 0) 33.33% 0 / 1px 100% no-repeat,
+    linear-gradient(currentColor 0 0) 66.67% 0 / 1px 100% no-repeat,
+    linear-gradient(currentColor 0 0) 0 33.33% / 100% 1px no-repeat,
+    linear-gradient(currentColor 0 0) 0 66.67% / 100% 1px no-repeat,
+    #fff;
+  content: "";
+}
+
+.word-table-icon.is-small {
+  width: 17px;
+  height: 15px;
+}
+
+.word-table-controls {
+  gap: 4px;
+}
+
+.word-table-header-button.el-button.is-active {
+  background: #e9f1fd;
+  color: #185abd;
+}
+
+.word-table-header-icon {
+  --word-table-icon-header-color: #aac6eb;
+}
+
+.word-table-popover.el-popper,
+.word-insert-table-dialog.el-dialog {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.word-table-popover.el-popper {
+  max-width: calc(100vw - 16px);
+  max-height: calc(100dvh - 16px);
+  overflow: auto;
+}
+
+.word-table-picker-size {
+  margin-bottom: 8px;
+  color: #172033;
+  font-weight: 600;
+}
+
+.word-table-size-grid {
+  display: grid;
+  gap: 3px;
+}
+
+.word-table-size-row {
+  display: grid;
+  grid-template-columns: repeat(var(--word-table-grid-columns), minmax(0, 1fr));
+  gap: 3px;
+}
+
+.word-table-size-row .word-table-size-cell.el-button {
+  --el-button-border-color: #bdc6d3;
+  --el-button-hover-border-color: #185abd;
+  --el-button-hover-bg-color: #e9f1fd;
+
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+  margin-left: 0;
+  border-radius: 2px;
+  padding: 0;
+}
+
+.word-table-size-cell.el-button.is-highlighted {
+  --el-button-border-color: #5e89c7;
+  --el-button-bg-color: #dceafe;
+}
+
+.word-table-dialog-button.el-button {
+  width: 100%;
+  justify-content: flex-start;
+  margin-top: 8px;
+  padding: 0 6px;
+}
+
+.word-table-dialog-button.el-button > span {
+  gap: 8px;
+}
+
+.word-insert-table-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.word-insert-table-fields label {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.word-insert-table-fields .el-input-number {
+  width: 100%;
+}
+
+.word-insert-table-error {
+  margin-top: 12px;
+}

@@ -16,21 +16,22 @@
   padding: 0 14px;
 }
 
-.word-ribbon-tab {
+.word-ribbon-tab.el-button {
+  --el-fill-color-light: transparent;
+  --el-fill-color: transparent;
+
   position: relative;
   min-width: 58px;
+  height: 100%;
+  margin-left: 0;
   border: 0;
-  background: transparent;
+  border-radius: 0;
+  padding: 0 8px;
   color: #394150;
-  cursor: pointer;
-  font-size: 14px;
+  font-weight: 400;
 }
 
-.word-ribbon-tab:hover {
-  background: transparent;
-}
-
-.word-ribbon-tab.is-active {
+.word-ribbon-tab.el-button.is-active {
   color: #185abd;
   font-weight: 600;
 }
@@ -53,7 +54,7 @@
   background: #185abd;
 }
 
-.word-ribbon-tab:focus-visible {
+.word-ribbon .word-ribbon-tab.el-button.is-text:focus-visible {
   outline: 2px solid #185abd;
   outline-offset: -3px;
 }
@@ -123,27 +124,304 @@
   text-align: center;
 }
 
-.word-ribbon-checkbox {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: #273142;
-  cursor: pointer;
+.word-ribbon-checkbox.el-checkbox {
+  --el-checkbox-checked-bg-color: #185abd;
+  --el-checkbox-checked-input-border-color: #185abd;
+  --el-checkbox-checked-text-color: #273142;
+  --el-checkbox-text-color: #273142;
+
+  margin-right: 0;
+}
+
+.word-page-setup-controls {
+  gap: 4px;
+}
+
+.word-page-setup-button.el-button {
+  --el-fill-color-light: #e9f1fd;
+  --el-fill-color: #e9f1fd;
+
+  min-width: 84px;
+  height: 70px;
+  border-radius: 5px;
+  padding: 4px 8px;
   font-size: 13px;
-  user-select: none;
+  font-weight: 400;
 }
 
-.word-ribbon-checkbox input {
-  width: 15px;
-  height: 15px;
-  margin: 0;
-  accent-color: #185abd;
-  cursor: pointer;
+.word-page-setup-button.el-button > span {
+  display: grid;
+  justify-items: center;
+  gap: 5px;
 }
 
-.word-ribbon-checkbox:has(input:focus-visible) {
-  outline: 2px solid #185abd;
-  outline-offset: 3px;
+.word-page-setup-button.el-button[aria-expanded="true"] {
+  background: #e9f1fd;
+}
+
+.word-page-setup-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.word-orientation-icon,
+.word-margins-icon {
+  position: relative;
+  width: 40px;
+  height: 36px;
+  color: #394150;
+}
+
+.word-orientation-icon::before,
+.word-orientation-icon::after {
+  position: absolute;
+  border: 2px solid currentColor;
+  border-radius: 2px;
+  background: #fff;
+  content: "";
+}
+
+.word-margins-icon::before {
+  position: absolute;
+  inset: 1px 7px;
+  border: 2px solid currentColor;
+  border-radius: 2px;
+  background: #fff;
+  content: "";
+}
+
+.word-margins-guide {
+  position: absolute;
+  inset: 4px 9px;
+}
+
+.word-margins-guide::before,
+.word-margins-guide::after {
+  position: absolute;
+  content: "";
+}
+
+.word-margins-guide::before {
+  inset: 6px 0;
+  border-block: 1px dashed #185abd;
+}
+
+.word-margins-guide::after {
+  inset: 0 3px;
+  border-inline: 1px dashed #185abd;
+}
+
+.word-orientation-icon::before {
+  top: 2px;
+  left: 3px;
+  width: 22px;
+  height: 28px;
+}
+
+.word-orientation-icon::after {
+  right: 2px;
+  bottom: 2px;
+  width: 28px;
+  height: 20px;
+}
+
+.word-style-button.el-button {
+  width: 124px;
+  height: 30px;
+  padding: 4px 8px;
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.word-style-button.el-button > span {
+  width: 100%;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.word-style-chevron {
+  width: 6px;
+  height: 6px;
+  margin-top: -3px;
+  border-right: 1px solid;
+  border-bottom: 1px solid;
+  transform: rotate(45deg);
+}
+
+:is(.word-style-menu, .word-font-size-menu, .word-margins-menu, .word-orientation-menu).el-popper {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.word-style-menu {
+  min-width: 124px;
+}
+
+:is(.word-style-menu, .word-font-size-menu, .word-orientation-menu, .word-margins-menu) .el-dropdown-menu__item[aria-checked="true"] {
+  background: #e9f1fd;
+  color: #185abd;
+}
+
+.word-orientation-menu {
+  width: 132px;
+}
+
+.word-orientation-menu .word-orientation-option {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 8px;
+}
+
+.word-orientation-option-icon {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  place-items: center;
+}
+
+.word-orientation-option-icon::before {
+  width: 13px;
+  height: 18px;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+  background: #fff;
+  content: "";
+}
+
+.word-orientation-option-icon.is-landscape::before {
+  width: 18px;
+  height: 13px;
+}
+
+.word-margins-menu {
+  width: 224px;
+}
+
+.word-margins-menu .word-margins-option {
+  display: flex;
+  min-height: 46px;
+  align-items: center;
+  gap: 10px;
+}
+
+.word-margin-preview {
+  position: relative;
+  width: 25px;
+  height: 32px;
+  flex: none;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  background: #fff;
+}
+
+.word-margin-preview::after {
+  position: absolute;
+  inset: var(--margin-preview-y) var(--margin-preview-x);
+  border: 1px solid #8c9bb1;
+  background: #e9f1fd;
+  content: "";
+}
+
+.word-margin-preset-label,
+.word-margin-preset-values {
+  display: block;
+}
+
+.word-margin-preset-values {
+  color: #687181;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.word-margins-custom {
+  min-height: 32px;
+}
+
+.word-style-button .is-heading,
+.word-style-menu .el-dropdown-menu__item.is-heading {
+  font-weight: 700;
+}
+
+.word-font-controls {
+  display: grid;
+  grid-template-columns: auto auto;
+  align-content: center;
+  gap: 4px 8px;
+}
+
+.word-inline-formats {
+  display: flex;
+  grid-column: 1;
+  gap: 3px;
+}
+
+.word-inline-format.el-button {
+  --el-fill-color-light: #e5e7eb;
+
+  width: 28px;
+  height: 26px;
+  margin-left: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 0;
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.word-inline-format.is-bold {
+  font-weight: 700;
+}
+
+.word-inline-format.is-italic {
+  font-style: italic;
+}
+
+.word-inline-format.is-underline {
+  text-decoration: underline;
+}
+
+.word-inline-format.el-button[aria-pressed="true"] {
+  --el-fill-color-light: #e9f1fd;
+
+  border-color: #c3d7f3;
+  background: #e9f1fd;
+  color: #185abd;
+}
+
+.word-font-size-control {
+  display: flex;
+  width: 76px;
+  align-self: center;
+  border: 1px solid #cbd0d8;
+  border-radius: 4px;
+  background: #fff;
+  font-size: 13px;
+}
+
+.word-font-size-control:focus-within {
+  border-color: #185abd;
+}
+
+.word-font-size-control .el-input {
+  min-width: 0;
+}
+
+.word-font-size-control .el-input__wrapper {
+  height: 28px;
+  box-shadow: none;
+  padding: 0 0 0 8px;
+}
+
+.word-font-size-control .word-font-size-toggle {
+  width: 24px;
+  height: 28px;
+  padding: 0;
+}
+
+.word-font-size-menu {
+  width: 76px;
 }
 
 @media print {

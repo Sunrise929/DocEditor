@@ -1,7 +1,11 @@
 .word-editor-canvas {
   --word-ribbon-bottom: 80px;
+  --horizontal-ruler-height: 30px;
+  --document-padding-block: 32px;
+  --document-page-gap: 24px;
 
   position: relative;
+  min-width: calc(var(--document-width) + 64px);
   min-height: calc(100vh - var(--word-ribbon-bottom));
   background: #e5e7eb;
 }
@@ -14,18 +18,14 @@
   min-height: calc(100vh - 176px);
   overflow-x: auto;
   background: #e5e7eb;
-  padding: 32px max(24px, calc((100vw - 210mm) / 2));
+  padding: var(--document-padding-block) 32px;
 }
 
-.paginated-editor {
-  min-width: 210mm;
-}
-
-.document-root {
+[data-document-root] {
   outline: none;
 }
 
-.document-page {
+[data-page] {
   --page-margin-top: 25mm;
   --page-margin-right: 20mm;
   --page-margin-bottom: 25mm;
@@ -34,9 +34,9 @@
   --margin-mark-color: rgb(100 116 139 / 72%);
 
   contain: layout;
-  width: 210mm;
-  height: 297mm;
-  margin: 0 auto 24px;
+  width: var(--page-width);
+  height: var(--page-height);
+  margin: 0 auto var(--document-page-gap);
   overflow: hidden;
   background-color: #fff;
   background-image:
@@ -72,7 +72,7 @@
     0 10px 32px rgb(15 23 42 / 10%);
 }
 
-.page-content {
+[data-page-content] {
   width: 100%;
   height: 100%;
   overflow: hidden;
@@ -81,103 +81,72 @@
     var(--page-margin-right)
     var(--page-margin-bottom)
     var(--page-margin-left);
-  color: #111827;
-  font-size: 12pt;
-  line-height: 1.75;
   overflow-wrap: anywhere;
-  caret-color: #111827;
 }
 
-.page-content > *:first-child {
-  margin-top: 0;
+[data-page-content] div:has(> table[data-document-table]) {
+  overflow: auto;
 }
 
-.page-content p {
-  min-height: 1.75em;
-  margin: 0 0 0.75em;
+[data-page-content] > div:has(> table[data-document-table]) {
+  max-height: calc(var(--page-height) - var(--page-margin-top) - var(--page-margin-bottom));
 }
 
-.page-content h1,
-.page-content h2,
-.page-content h3 {
-  color: #111827;
-  line-height: 1.3;
-  break-after: avoid;
+table[data-document-table] {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
 }
 
-.page-content h1 {
-  margin: 0 0 0.75em;
-  font-size: 24pt;
+[data-document-table] :is(td, th) {
+  border: 1px solid #6b7280;
+  padding: 2px 5px;
+  vertical-align: top;
 }
 
-.page-content h2 {
-  margin: 1.25em 0 0.6em;
-  font-size: 18pt;
+[data-document-table] :is(td, th).selectedCell {
+  --table-cell-selection: #e9f1fd;
+  background: var(--table-cell-selection);
 }
 
-.page-content h3 {
-  margin: 1em 0 0.5em;
-  font-size: 14pt;
-}
-
-.page-content ul,
-.page-content ol {
-  margin: 0.75em 0;
-  padding-left: 2em;
-}
-
-.page-content ul {
-  list-style: disc;
-}
-
-.page-content ol {
-  list-style: decimal;
-}
-
-.page-content blockquote {
-  margin: 1em 0;
-  border-left: 3px solid #9ca3af;
-  padding-left: 1em;
-  color: #4b5563;
-}
-
-.page-content pre {
-  overflow-x: auto;
-  border-radius: 4px;
-  background: #f3f4f6;
-  padding: 12px 16px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 10pt;
-  line-height: 1.55;
-  white-space: pre-wrap;
-}
-
-.page-content code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-}
-
-.page-content ::selection {
-  background: #bfdbfe;
+.word-pagination-measure {
+  position: fixed;
+  inset: 0 auto auto 0;
+  height: auto;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 @media (max-width: 900px) {
-  .document-workspace {
-    padding-top: 20px;
-    padding-bottom: 20px;
+  .word-editor-canvas {
+    --document-padding-block: 20px;
   }
 }
 
 @media print {
+  @page doceditor-landscape {
+    size: A4 landscape;
+    margin: 0;
+  }
+
+  .word-editor-canvas {
+    min-width: 0;
+  }
+
   .document-workspace {
     overflow: visible;
     background: #fff;
     padding: 0;
   }
 
-  .document-page {
+  [data-page] {
     margin: 0;
     background-image: none;
     box-shadow: none;
     break-after: page;
+  }
+
+  [data-page][data-orientation="landscape"] {
+    page: doceditor-landscape;
   }
 }

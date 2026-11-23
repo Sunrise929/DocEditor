@@ -1,15 +1,38 @@
 <script setup lang="ts">
-import { Extension, mergeAttributes, Node as TiptapNode, type Editor } from '@tiptap/core'
+import { Extension, findParentNodeClosestToPos, mergeAttributes, Node as TiptapNode, type Attributes, type Editor } from '@tiptap/core'
+import { CodeBlock } from '@tiptap/extension-code-block'
+import { TableKit } from '@tiptap/extension-table'
 import StarterKit from '@tiptap/starter-kit'
+import { closeHistory } from '@tiptap/pm/history'
 import { Fragment, Slice, type Node as ProseMirrorNode } from '@tiptap/pm/model'
-import { Plugin, TextSelection } from '@tiptap/pm/state'
+import { Plugin, Selection, TextSelection, type Transaction } from '@tiptap/pm/state'
 import { canJoin } from '@tiptap/pm/transform'
 import { EditorContent, useEditor } from '@tiptap/vue-3'
-import { reactive, ref } from 'vue'
+import { ref } from 'vue'
 import WordRulers from '../WordRulers/WordRulers.vue'
+import WordTableInsertControls from './WordTableInsertControls.vue'
+import { BlockFontSize, InlineTextStyle, parseFontSize, readSelectionFontSize, setFontSizeAtCursor } from './blockFontSize'
+import { blockStyleOptions, DocumentHeading, isHeadingLevel, type DocumentBlockStyle } from './documentHeading'
+import { hasHeaderRow, PreventNestedTables, tableAtSelection, toggleFirstRowHeader } from './documentTable'
+import { inlineFormatCommands, type InlineFormat, type InlineFormatState } from './inlineFormatting'
+import { isValidTableSize, type TableSize } from './tableSize'
+import {
+  DEFAULT_PAGE_MARGINS, fitPageMargins, pageDimensions, readPageOrientation,
+  samePageMargins, validPageMargins, type PageMargins, type PageOrientation,
+} from './pageGeometry'
 import { adjustIndent, indentDefaults, type IndentHandle, type ParagraphIndent } from '../WordRulers/paragraphIndent'
 
 defineOptions({ name: 'WordEditor' })
+
+const emit = defineEmits<{
+  blockStyleChange: [style: DocumentBlockStyle | null]
+  blockFontSizeChange: [size: number | null, available: boolean]
+  inlineFormatsChange: [formats: InlineFormatState]
+  pageOrientationChange: [orientation: PageOrientation]
+  pageMarginsChange: [margins: PageMargins]
+  tableInsertionAvailabilityChange: [available: boolean]
+  tableHeaderChange: [header: boolean | null]
+}>()
 
 withDefaults(defineProps<{
   showRulers?: boolean
@@ -24,29 +47,23 @@ type PageEntry = {
   pos: number
 }
 
-type PageMargins = {
-  marginTop: number
-  marginRight: number
-  marginBottom: number
-  marginLeft: number
-}
-
 type MarginKey = keyof PageMargins
 
-const DEFAULT_PAGE_MARGINS: PageMargins = {
-  marginTop: 25,
-  marginRight: 20,
-  marginBottom: 25,
-  marginLeft: 20,
-}
-
 const currentPageNumber = ref(1)
-const currentPageMargins = reactive<PageMargins>({ ...DEFAULT_PAGE_MARGINS })
+const currentPageMargins = ref<PageMargins>({ ...DEFAULT_PAGE_MARGINS })
+const currentPageDimensions = ref(pageDimensions('portrait'))
+const currentPageOffset = ref(0)
+const documentWidth = ref(currentPageDimensions.value.width)
+let layoutDoc: ProseMirrorNode | undefined
+let pageOrientations: PageOrientation[] = []
 const paragraphIndent = ref<ParagraphIndent | null>(null)
 const indentKeys = Object.keys(indentDefaults) as (keyof ParagraphIndent)[]
+const indentableBlockTypes = ['paragraph', 'heading']
+const isIndentableBlock = (node: ProseMirrorNode) =>
+  indentableBlockTypes.includes(node.type.name)
 
-const ParagraphIndentation = Extension.create({
-  name: 'paragraphIndentation',
+const BlockIndentation = Extension.create({
+  name: 'blockIndentation',
   addGlobalAttributes() {
     const properties = {
       indentLeft: ['data-indent-left', 'margin-left'],
@@ -54,7 +71,7 @@ const ParagraphIndentation = Extension.create({
       firstLineOffset: ['data-first-line-offset', 'text-indent'],
     } as const
     return [{
-      types: ['paragraph'],
+      types: indentableBlockTypes,
       attributes: Object.fromEntries(indentKeys.map(key => {
         const [attribute, property] = properties[key]
         return [key, {
@@ -76,13 +93,48 @@ const readIndent = (node: ProseMirrorNode): ParagraphIndent => ({
   firstLineOffset: marginValue(node.attrs.firstLineOffset, 0),
 })
 
-const syncParagraphIndent = (instance: Editor) => {
-  const { $from } = instance.state.selection
-  const next = $from.parent.type.name === 'paragraph' ? readIndent($from.parent) : null
+const syncBlockIndent = (instance: Editor) => {
+  const { $head } = instance.state.selection
+  const next = isIndentableBlock($head.parent) ? readIndent($head.parent) : null
   const previous = paragraphIndent.value
   if (next ? !previous || indentKeys.some(key => next[key] !== previous[key]) : previous) {
     paragraphIndent.value = next
   }
+}
+
+const syncBlockStyle = ({ state }: Editor) => {
+  const { $head } = state.selection
+  const { type, attrs } = $head.parent
+  const fontSizeAvailable = isIndentableBlock($head.parent)
+  const size = fontSizeAvailable ? readSelectionFontSize(state) : null
+  emit('blockFontSizeChange', size, fontSizeAvailable)
+  const style = type.name === 'heading' && isHeadingLevel(attrs.level)
+    ? attrs.level
+    : type.name === 'paragraph' ? 'paragraph' : null
+  const alternate = style === 'paragraph' ? state.schema.nodes.heading : state.schema.nodes.paragraph
+
+  if (style === null || !alternate || $head.depth === 0) {
+    emit('blockStyleChange', null)
+    return
+  }
+
+  const parent = $head.node($head.depth - 1)
+  const index = $head.index($head.depth - 1)
+  emit('blockStyleChange', parent.canReplaceWith(index, index + 1, alternate) ? style : null)
+}
+
+const syncInlineFormats = (instance: Editor) => {
+  emit('inlineFormatsChange', {
+    bold: instance.isActive('bold'),
+    italic: instance.isActive('italic'),
+    underline: instance.isActive('underline'),
+  })
+}
+
+const syncTableTools = (instance: Editor) => {
+  const table = tableAtSelection(instance.state.selection)
+  emit('tableInsertionAvailabilityChange', !table)
+  emit('tableHeaderChange', table ? hasHeaderRow(table.node) : null)
 }
 
 const marginValue = (value: unknown, fallback: number) => {
@@ -120,14 +172,42 @@ const pageAtPosition = (
 }
 
 const syncCurrentPage = (editorInstance: Editor) => {
-  const page = pageAtPosition(
-    editorInstance.state.doc,
-    editorInstance.state.selection.from,
-  )
+  const { doc, selection } = editorInstance.state
+  const page = pageAtPosition(doc, selection.head)
   if (!page) return
 
+  let layoutChanged = false
+  if (doc !== layoutDoc) {
+    layoutDoc = doc
+    const nextOrientations: PageOrientation[] = []
+    doc.forEach((node) => {
+      nextOrientations.push(readPageOrientation(node.attrs.orientation))
+    })
+    layoutChanged = nextOrientations.length !== pageOrientations.length
+      || nextOrientations.some((orientation, index) => pageOrientations[index] !== orientation)
+    if (layoutChanged) {
+      pageOrientations = nextOrientations
+      documentWidth.value = pageDimensions(pageOrientations.includes('landscape') ? 'landscape' : 'portrait').width
+    }
+  }
+
+  const orientation = readPageOrientation(page.node.attrs.orientation)
+  const dimensions = pageDimensions(orientation)
+  if (currentPageDimensions.value.width !== dimensions.width) currentPageDimensions.value = dimensions
+  if (layoutChanged || currentPageNumber.value !== page.index + 1) {
+    const firstPage = editorInstance.view.nodeDOM(0)
+    const currentPage = editorInstance.view.nodeDOM(page.pos)
+    if (firstPage instanceof HTMLElement && currentPage instanceof HTMLElement) {
+      currentPageOffset.value = currentPage.getBoundingClientRect().top - firstPage.getBoundingClientRect().top
+    }
+  }
   currentPageNumber.value = page.index + 1
-  Object.assign(currentPageMargins, pageMarginsFromNode(page.node))
+  const margins = pageMarginsFromNode(page.node)
+  if (!samePageMargins(currentPageMargins.value, margins)) {
+    currentPageMargins.value = margins
+    emit('pageMarginsChange', margins)
+  }
+  emit('pageOrientationChange', orientation)
 }
 
 const removePageWrappersFromClipboard = (slice: Slice) => {
@@ -170,6 +250,11 @@ const Page = TiptapNode.create({
 
   addAttributes() {
     return {
+      orientation: {
+        default: 'portrait',
+        parseHTML: (element) => readPageOrientation(element.getAttribute('data-orientation')),
+        renderHTML: (attributes) => ({ 'data-orientation': readPageOrientation(attributes.orientation) }),
+      },
       marginTop: {
         default: DEFAULT_PAGE_MARGINS.marginTop,
         parseHTML: (element) =>
@@ -262,20 +347,22 @@ const Page = TiptapNode.create({
 
   renderHTML({ node, HTMLAttributes }) {
     const margins = pageMarginsFromNode(node)
+    const { width, height } = pageDimensions(readPageOrientation(node.attrs.orientation))
 
     return [
       'section',
       mergeAttributes(HTMLAttributes, {
-        class: 'document-page',
         'data-page': '',
         style: [
+          `--page-width: ${width}mm`,
+          `--page-height: ${height}mm`,
           `--page-margin-top: ${margins.marginTop}mm`,
           `--page-margin-right: ${margins.marginRight}mm`,
           `--page-margin-bottom: ${margins.marginBottom}mm`,
           `--page-margin-left: ${margins.marginLeft}mm`,
         ].join('; '),
       }),
-      ['div', { class: 'page-content', 'data-page-content': '' }, 0],
+      ['div', { 'data-page-content': '' }, 0],
     ]
   },
 })
@@ -368,6 +455,51 @@ const Pagination = Extension.create({
             return rect.bottom + pixels(style.marginBottom)
           }
 
+          const blockHeight = (element: Element) => {
+            const style = window.getComputedStyle(element)
+            return element.getBoundingClientRect().height + pixels(style.marginTop) + pixels(style.marginBottom)
+          }
+
+          function* candidateHeights(currentContent: HTMLElement, nextContent: HTMLElement) {
+            const currentStyle = window.getComputedStyle(currentContent)
+            const nextStyle = window.getComputedStyle(nextContent)
+            const currentWidth = currentContent.clientWidth - pixels(currentStyle.paddingLeft) - pixels(currentStyle.paddingRight)
+            const nextWidth = nextContent.clientWidth - pixels(nextStyle.paddingLeft) - pixels(nextStyle.paddingRight)
+            if (Math.abs(currentWidth - nextWidth) < 0.05) {
+              for (const element of nextContent.children) yield blockHeight(element)
+              return
+            }
+
+            // Compare the blocks at the destination width without mutating ProseMirror's DOM.
+            const measure = currentContent.cloneNode(false) as HTMLElement
+            measure.classList.add('word-pagination-measure')
+            measure.setAttribute('aria-hidden', 'true')
+            measure.style.width = `${currentContent.getBoundingClientRect().width}px`
+            measure.style.padding = `0 ${currentStyle.paddingRight} 0 ${currentStyle.paddingLeft}`
+            measure.append(...Array.from(nextContent.children, element => element.cloneNode(true)))
+            editorView.dom.after(measure)
+            try {
+              for (const element of measure.children) yield blockHeight(element)
+            } finally {
+              measure.remove()
+            }
+          }
+
+          const preserveMovedSelection = (transaction: Transaction, from: number, to: number, destination: number) => {
+            const { selection } = editorView.state
+            if (!(selection instanceof TextSelection)) return
+            const inside = (position: number) => position >= from && position < to
+            if (!inside(selection.anchor) && !inside(selection.head)) return
+
+            const map = (position: number) =>
+              inside(position) ? destination + position - from : transaction.mapping.map(position)
+            transaction.setSelection(TextSelection.between(
+              transaction.doc.resolve(map(selection.anchor)),
+              transaction.doc.resolve(map(selection.head)),
+            ))
+            if (editorView.hasFocus()) transaction.scrollIntoView()
+          }
+
           const removeEmptyNextPage = (
             pageIndex: number,
             entries: PageEntry[],
@@ -418,23 +550,22 @@ const Pagination = Extension.create({
             const movingTo = current.pos + 1 + current.node.content.size
             const next = entries[pageIndex + 1]
             const transaction = editorView.state.tr.delete(movingFrom, movingTo)
+            let destination: number
 
             if (next) {
-              transaction.insert(
-                transaction.mapping.map(next.pos + 1),
-                movingContent,
-              )
+              destination = transaction.mapping.map(next.pos + 1)
+              transaction.insert(destination, movingContent)
             } else {
               const pageType = editorView.state.schema.nodes.page
               if (!pageType) return false
 
-              const newPage = pageType.create(current.node.attrs, movingContent)
-              transaction.insert(
-                transaction.mapping.map(current.pos + current.node.nodeSize),
-                newPage,
-              )
+              const newPage = pageType.create(fitPageMargins(pageMarginsFromNode(current.node), 'portrait'), movingContent)
+              const pagePosition = transaction.mapping.map(current.pos + current.node.nodeSize)
+              transaction.insert(pagePosition, newPage)
+              destination = pagePosition + 1
             }
 
+            preserveMovedSelection(transaction, movingFrom, movingTo, destination)
             dispatchPagination(transaction)
             requestRun(pageIndex, pageIndex + 1)
             return true
@@ -476,28 +607,17 @@ const Pagination = Extension.create({
                 ? contentTop
                 : outerBlockBottom(lastElement)
             const availableHeight = contentBottom - occupiedBottom
-            const candidateElements = Array.from(
-              nextContent.children,
-            ) as HTMLElement[]
+            if (availableHeight <= 2) return false
+            let index = 0
             let movingSize = 0
             let usedHeight = 0
 
-            for (
-              let index = 0;
-              index < next.node.childCount && index < candidateElements.length;
-              index += 1
-            ) {
-              const element = candidateElements[index]
-              const style = window.getComputedStyle(element)
-              const blockHeight =
-                element.getBoundingClientRect().height +
-                Number.parseFloat(style.marginTop || '0') +
-                Number.parseFloat(style.marginBottom || '0')
+            for (const height of candidateHeights(currentContent, nextContent)) {
+              if (index >= next.node.childCount || usedHeight + height > availableHeight - 2) break
 
-              if (usedHeight + blockHeight > availableHeight - 2) break
-
-              usedHeight += blockHeight
+              usedHeight += height
               movingSize += next.node.child(index).nodeSize
+              index += 1
             }
 
             if (movingSize === 0) return false
@@ -518,6 +638,7 @@ const Pagination = Extension.create({
 
             transaction.insert(insertAt, movingContent)
 
+            preserveMovedSelection(transaction, movingFrom, movingTo, insertAt)
             dispatchPagination(transaction)
             backwardFlowPages.add(pageIndex)
             backwardFlowPages.add(pageIndex + 1)
@@ -600,6 +721,14 @@ const Pagination = Extension.create({
                 backwardFlowPages.delete(currentPage)
               }
 
+              view.state.doc.forEach((page, _pos, index) => {
+                const previous = previousState.doc.maybeChild(index)
+                if (previous && !page.sameMarkup(previous)) {
+                  backwardFlowPages.add(index)
+                  dirtyPages.add(index)
+                }
+              })
+
               requestRun(currentPage - 1, currentPage)
             },
 
@@ -616,12 +745,43 @@ const Pagination = Extension.create({
   },
 })
 
+const DocumentCodeBlock = CodeBlock.extend({
+  addAttributes() {
+    const inherited: Attributes = this.parent?.() ?? {}
+    return {
+      language: {
+        ...inherited.language,
+        parseHTML: (element: HTMLElement) =>
+          element.firstElementChild?.getAttribute('data-language')
+          ?? inherited.language?.parseHTML?.(element)
+          ?? null,
+      },
+    }
+  },
+  renderHTML({ node, HTMLAttributes }) {
+    return [
+      'pre',
+      HTMLAttributes,
+      ['code', { 'data-language': node.attrs.language }, 0],
+    ]
+  },
+})
+
 // Keep one ProseMirror instance for the whole document so 100+ pages do not
 // create 100+ independent editors, histories, and event systems.
 const editor = useEditor({
   extensions: [
-    StarterKit.configure({ document: false }),
-    ParagraphIndentation,
+    StarterKit.configure({ document: false, heading: false, codeBlock: false }),
+    TableKit.configure({
+      table: { cellMinWidth: 18, HTMLAttributes: { 'data-document-table': '' } },
+      tableHeader: { HTMLAttributes: { style: 'background-color: var(--table-cell-selection, #edf3fa)' } },
+    }),
+    PreventNestedTables,
+    DocumentCodeBlock,
+    DocumentHeading,
+    BlockIndentation,
+    BlockFontSize,
+    InlineTextStyle,
     PaginatedDocument,
     Page,
     Pagination,
@@ -631,41 +791,94 @@ const editor = useEditor({
     content: [
       {
         type: 'page',
-        content: [{ type: 'paragraph' }],
+        content: blockStyleOptions.map(({ value, label }) => ({
+          type: value === 'paragraph' ? 'paragraph' : 'heading',
+          ...(value === 'paragraph' ? {} : { attrs: { level: value } }),
+          content: [{ type: 'text', text: label }],
+        })),
       },
     ],
   },
   editorProps: {
     transformCopied: removePageWrappersFromClipboard,
     attributes: {
-      class: 'document-root',
+      'data-document-root': '',
       spellcheck: 'true',
     },
   },
   onCreate: ({ editor: editorInstance }) => {
     syncCurrentPage(editorInstance)
-    syncParagraphIndent(editorInstance)
+    syncBlockIndent(editorInstance)
+    syncBlockStyle(editorInstance)
+    syncInlineFormats(editorInstance)
+    syncTableTools(editorInstance)
   },
-  onSelectionUpdate: ({ editor: editorInstance }) =>
-    syncCurrentPage(editorInstance),
   onTransaction: ({ editor: editorInstance }) => {
     syncCurrentPage(editorInstance)
-    syncParagraphIndent(editorInstance)
+    syncBlockIndent(editorInstance)
+    syncBlockStyle(editorInstance)
+    syncInlineFormats(editorInstance)
+    syncTableTools(editorInstance)
   },
 })
 
-const updateParagraphIndent = (handle: IndentHandle, delta: number) => {
+const setBlockStyle = (style: DocumentBlockStyle) => {
+  const instance = editor.value
+  if (!instance || (style !== 'paragraph' && !isHeadingLevel(style))) return
+  const { state, view } = instance
+  const { $head } = state.selection
+  const block = $head.parent
+  if (!isIndentableBlock(block)) return
+
+  const target = state.schema.nodes[style === 'paragraph' ? 'paragraph' : 'heading']
+  if (!target) return
+  const parent = $head.node($head.depth - 1)
+  const index = $head.index($head.depth - 1)
+  if (!parent.canReplaceWith(index, index + 1, target, block.marks)
+      || !target.validContent(block.content)) return
+
+  if (target !== block.type || (style !== 'paragraph' && block.attrs.level !== style)) {
+    const formatting = {
+      ...readIndent(block),
+      fontSize: parseFontSize(block.attrs.fontSize),
+    }
+    const attrs = style === 'paragraph' ? formatting : { ...formatting, level: style }
+    view.dispatch(state.tr.setNodeMarkup($head.before(), target, attrs).scrollIntoView())
+  }
+  view.focus()
+}
+
+const setBlockFontSize = (size: number, focusEditor: boolean) => {
+  const instance = editor.value
+  if (!instance || parseFontSize(size) === null) return
+  const { state, view } = instance
+  if (!state.selection.empty) {
+    instance.commands.setMark('textStyle', { fontSize: size })
+    if (focusEditor) view.focus()
+    return
+  }
+
+  const { $head } = state.selection
+  if (!isIndentableBlock($head.parent)) return
+
+  const transaction = setFontSizeAtCursor(state, size)
+  if (transaction.docChanged || transaction.storedMarksSet) view.dispatch(transaction)
+  if (focusEditor) view.focus()
+}
+
+const updateBlockIndent = (handle: IndentHandle, delta: number) => {
   const instance = editor.value
   if (!instance || !delta) return
   const { doc, selection, tr } = instance.state
   const update = (node: ProseMirrorNode, pos: number) => {
-    if (node.type.name !== 'paragraph') return
+    if (!isIndentableBlock(node)) return
     const page = pageAtPosition(doc, pos + 1)
     if (!page) return false
     const { marginLeft, marginRight } = pageMarginsFromNode(page.node)
+    const { width } = pageDimensions(readPageOrientation(page.node.attrs.orientation))
     const before = readIndent(node)
     const after = adjustIndent(
-      before, handle, delta, (210 - marginLeft - marginRight) / 10,
+      before, handle, delta, (width - marginLeft - marginRight) / 10,
       marginLeft / 10, marginRight / 10,
     )
     if (indentKeys.some(key => before[key] !== after[key])) {
@@ -675,32 +888,86 @@ const updateParagraphIndent = (handle: IndentHandle, delta: number) => {
   }
   if (selection.empty) {
     const { $from } = selection
-    if ($from.parent.type.name === 'paragraph') update($from.parent, $from.before())
+    if (isIndentableBlock($from.parent)) update($from.parent, $from.before())
   } else {
     doc.nodesBetween(selection.from, selection.to, update)
   }
   if (tr.docChanged) instance.view.dispatch(tr)
 }
 
-const updateCurrentPageMargin = (key: MarginKey, value: number) => {
-  const editorInstance = editor.value
-  if (!editorInstance) return
-
-  const page = pageAtPosition(
-    editorInstance.state.doc,
-    editorInstance.state.selection.from,
-  )
+const setCurrentPageMargins = (changes: Partial<PageMargins>, fromRuler = false) => {
+  const instance = editor.value
+  if (!instance) return
+  const { state, view } = instance
+  const page = pageAtPosition(state.doc, state.selection.head)
   if (!page) return
 
-  const transaction = editorInstance.state.tr
-    .setNodeMarkup(page.pos, undefined, {
-      ...page.node.attrs,
-      [key]: value,
-    })
-    .setMeta('addToHistory', false)
+  const previous = pageMarginsFromNode(page.node)
+  const margins = { ...previous, ...changes }
+  if (!samePageMargins(previous, margins) && validPageMargins(margins, readPageOrientation(page.node.attrs.orientation))) {
+    const transaction = state.tr.setNodeMarkup(page.pos, undefined, { ...page.node.attrs, ...margins })
+    view.dispatch(fromRuler ? transaction.setMeta('addToHistory', false) : closeHistory(transaction).scrollIntoView())
+  }
+  if (!fromRuler) view.focus()
+}
 
-  editorInstance.view.dispatch(transaction)
-  currentPageMargins[key] = value
+const updateCurrentPageMargin = (key: MarginKey, value: number) =>
+  setCurrentPageMargins({ [key]: value }, true)
+
+const setCurrentPageOrientation = (orientation: PageOrientation) => {
+  const instance = editor.value
+  if (!instance) return
+  const { state, view } = instance
+  const page = pageAtPosition(state.doc, state.selection.head)
+  if (!page) return
+
+  if (orientation !== readPageOrientation(page.node.attrs.orientation)) {
+    const margins = fitPageMargins(pageMarginsFromNode(page.node), orientation)
+    view.dispatch(closeHistory(state.tr.setNodeMarkup(page.pos, undefined, {
+      ...page.node.attrs,
+      ...margins,
+      orientation,
+    })).scrollIntoView())
+  }
+  view.focus()
+}
+
+const insertTable = (size: TableSize) => {
+  const instance = editor.value
+  if (!instance || !isValidTableSize(size) || tableAtSelection(instance.state.selection)) return
+
+  const inserted = instance.chain()
+    .command(({ tr }) => {
+      closeHistory(tr)
+      if (!tr.selection.empty) tr.setSelection(Selection.near(tr.selection.$head))
+      return true
+    })
+    .insertTable({ ...size, withHeaderRow: false })
+    .command(({ tr, state }) => {
+      const table = findParentNodeClosestToPos(tr.selection.$head, node => node.type === state.schema.nodes.table)
+      const paragraph = state.schema.nodes.paragraph
+      if (!table || !paragraph) return true
+
+      const afterTable = tr.doc.resolve(table.pos + table.node.nodeSize)
+      const index = afterTable.index()
+      if (index === afterTable.parent.childCount && afterTable.parent.canReplaceWith(index, index, paragraph)) {
+        tr.insert(afterTable.pos, paragraph.create())
+      }
+      return true
+    })
+    .run()
+
+  if (inserted) instance.view.focus()
+}
+
+const toggleTableHeader = () => {
+  const instance = editor.value
+  if (!instance) return
+  const transaction = toggleFirstRowHeader(instance.state)
+  if (!transaction?.docChanged) return
+
+  instance.view.dispatch(closeHistory(transaction))
+  instance.view.focus()
 }
 
 const undo = () => {
@@ -713,26 +980,45 @@ const redo = () => {
 
 const getJSON = () => editor.value?.getJSON()
 
-defineExpose({ getJSON, undo, redo })
+const toggleInlineFormat = (format: InlineFormat) => {
+  const instance = editor.value
+  if (!instance) return
+  instance.chain().focus()[inlineFormatCommands[format]]().run()
+}
+
+defineExpose({
+  getJSON, undo, redo, setBlockStyle, setBlockFontSize, toggleInlineFormat,
+  setCurrentPageOrientation, setCurrentPageMargins, insertTable,
+  toggleTableHeader,
+})
 </script>
 
 <template>
   <div
     class="word-editor-canvas"
     :class="{ 'is-ribbon-panel-pinned': ribbonPanelPinned }"
+    :style="{
+      '--document-width': `${documentWidth}mm`,
+      '--current-page-width': `${currentPageDimensions.width}mm`,
+      '--current-page-height': `${currentPageDimensions.height}mm`,
+    }"
   >
     <WordRulers
       v-if="showRulers"
       :current-page-number="currentPageNumber"
+      :page-width="currentPageDimensions.width"
+      :page-height="currentPageDimensions.height"
+      :page-offset="currentPageOffset"
       :margins="currentPageMargins"
       :paragraph-indent="paragraphIndent"
       @margin-change="updateCurrentPageMargin"
-      @indent-change="updateParagraphIndent"
+      @indent-change="updateBlockIndent"
     />
 
     <main class="document-workspace">
       <EditorContent v-if="editor" :editor="editor" class="paginated-editor" />
     </main>
+    <WordTableInsertControls v-if="editor" :editor="editor" />
   </div>
 </template>
 

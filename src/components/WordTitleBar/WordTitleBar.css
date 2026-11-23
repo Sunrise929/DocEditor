@@ -28,24 +28,12 @@
 }
 
 .word-autosave-switch {
-  position: relative;
-  display: inline-flex;
-  width: 34px;
-  height: 18px;
-  align-items: center;
-  border: 1px solid rgb(255 255 255 / 76%);
-  border-radius: 999px;
-  background: rgb(0 0 0 / 18%);
-  opacity: 0.82;
+  --el-switch-off-color: rgb(0 0 0 / 18%);
+  --el-switch-border-color: rgb(255 255 255 / 76%);
 }
 
-.word-autosave-thumb {
-  width: 12px;
-  height: 12px;
-  margin-left: 2px;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 2px rgb(0 0 0 / 30%);
+.word-titlebar .word-autosave-switch.is-disabled {
+  opacity: 0.82;
 }
 
 .word-titlebar-divider {
@@ -55,28 +43,19 @@
   background: rgb(255 255 255 / 28%);
 }
 
-.word-titlebar-button {
-  display: inline-flex;
+.word-titlebar .word-titlebar-button {
   width: 32px;
   height: 32px;
-  align-items: center;
-  justify-content: center;
-  border: 0;
+  margin-left: 0;
   border-radius: 4px;
-  background: transparent;
+  padding: 0;
   color: inherit;
-  cursor: pointer;
 }
 
-.word-titlebar-button:hover:not(:disabled),
-.word-titlebar-button:focus-visible {
+.word-titlebar .word-titlebar-button.is-text:hover,
+.word-titlebar .word-titlebar-button.is-text:focus-visible {
   background: rgb(255 255 255 / 16%);
   outline: none;
-}
-
-.word-titlebar-button:disabled {
-  cursor: default;
-  opacity: 0.45;
 }
 
 .word-titlebar-button svg {
