@@ -51,7 +51,6 @@ const options = rows.flatMap(row => columns.map(column => ({
   display: grid;
   grid-template-columns: repeat(3, 24px);
   gap: 2px;
-  margin-left: 4px;
 }
 
 .word-cell-alignment .el-button {

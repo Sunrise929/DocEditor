@@ -6,28 +6,21 @@ import 'element-plus/es/components/dialog/style/css'
 import 'element-plus/es/components/input-number/style/css'
 import 'element-plus/es/components/popover/style/css'
 import { reactive, ref, useId, watch } from 'vue'
-import type { TableBorderChange, TableBorders } from '../WordEditor/tableBorders'
 import WordTableBorderTools from './WordTableBorderTools.vue'
 import { isValidTableSize, MAX_TABLE_CELLS, type TableSize } from '../WordEditor/tableSize'
 
-const showTableGridlines = defineModel<boolean>('showTableGridlines', { default: true })
 const props = withDefaults(defineProps<{
   disabled: boolean
   insertOnly?: boolean
-  header?: boolean | null
   numbered?: boolean | null
-  borders?: TableBorders | null
 }>(), {
-  header: null,
   numbered: null,
-  borders: null,
 })
 const emit = defineEmits<{
   insert: [size: TableSize]
-  toggleHeader: []
   toggleNumbered: []
   columnSettings: []
-  borderChange: [change: TableBorderChange]
+  openBorders: []
 }>()
 const gridRows = 8
 const gridCols = 10
@@ -196,17 +189,6 @@ const finishDialog = () => {
       <template v-if="!insertOnly">
         <ElButton
           text
-          class="word-page-setup-button word-table-header-button"
-          :class="{ 'is-active': header }"
-          :disabled="header === null"
-          @mousedown.prevent
-          @click="emit('toggleHeader')"
-        >
-          <span class="word-table-icon word-table-header-icon" aria-hidden="true" />
-          <span>{{ header ? '取消表头' : '设置表头' }}</span>
-        </ElButton>
-        <ElButton
-          text
           class="word-page-setup-button word-table-numbered-button"
           :class="{ 'is-active': numbered }"
           :disabled="numbered === null"
@@ -224,7 +206,7 @@ const finishDialog = () => {
         <ElButton
           text
           class="word-page-setup-button word-table-column-settings-button"
-          :disabled="header === null"
+          :disabled="numbered === null"
           aria-haspopup="dialog"
           @mousedown.prevent
           @click="emit('columnSettings')"
@@ -233,9 +215,8 @@ const finishDialog = () => {
           <span>列宽与缩进</span>
         </ElButton>
         <WordTableBorderTools
-          v-model:show-table-gridlines="showTableGridlines"
-          :borders="borders"
-          @change="emit('borderChange', $event)"
+          :disabled="numbered === null"
+          @open-borders="emit('openBorders')"
         />
       </template>
     </div>

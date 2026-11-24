@@ -27,7 +27,5 @@ export const readTableColumns = (table: HTMLTableElement, count: number) => {
   if (rects.some(rect => !rect.width)) return null
   const first = rects[0]!
   const edges = [first.left, ...rects.map(rect => rect.right)]
-  const pixelEdges = edges.map(edge => Math.round(edge - first.left))
-  const widths = pixelEdges.slice(1).map((edge, index) => edge - pixelEdges[index]!)
-  return { edges, widths }
+  return { edges }
 }

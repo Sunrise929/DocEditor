@@ -33,13 +33,9 @@
   gap: 4px;
 }
 
-:is(.word-table-header-button, .word-table-numbered-button).el-button.is-active {
+.word-table-numbered-button.el-button.is-active {
   background: #e9f1fd;
   color: #185abd;
-}
-
-.word-table-header-icon {
-  --word-table-icon-header-color: #aac6eb;
 }
 
 .word-numbered-table-icon {

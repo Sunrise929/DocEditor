@@ -8,12 +8,13 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import PageMarginsDialog from './PageMarginsDialog.vue'
 import WordTableTools from './WordTableTools.vue'
 import WordCellAlignment from './WordCellAlignment.vue'
+import WordCellLines from './WordCellLines.vue'
+import type { CellLine, CellLineState } from '../WordEditor/cellLines'
 import { parseFontSize } from '../WordEditor/blockFontSize'
-import type { TableCellAction, TableCellAlignment, TableCellAlignmentState } from '../WordEditor/documentTable'
+import type { TableCellAlignment, TableCellAlignmentState } from '../WordEditor/documentTable'
 import { blockStyleOptions, type DocumentBlockStyle } from '../WordEditor/documentHeading'
 import type { InlineFormat, InlineFormatState } from '../WordEditor/inlineFormatting'
 import { pageDimensions, samePageMargins, type PageMargins, type PageOrientation } from '../WordEditor/pageGeometry'
-import type { TableBorderChange, TableBorders } from '../WordEditor/tableBorders'
 import type { TableSize } from '../WordEditor/tableSize'
 
 defineOptions({ name: 'WordRibbon' })
@@ -27,11 +28,9 @@ const props = defineProps<{
   fontSize: number | null
   canSetFontSize: boolean
   canInsertTable: boolean
-  tableHeader: boolean | null
   tableNumbered: boolean | null
-  tableBorders: TableBorders | null
-  tableCellAction: TableCellAction | null
   tableCellAlignment: TableCellAlignmentState
+  tableCellLine: CellLineState
   inlineFormats: InlineFormatState
   pageOrientation: PageOrientation
   pageMargins: PageMargins
@@ -43,12 +42,11 @@ const emit = defineEmits<{
   pageOrientationSelect: [orientation: PageOrientation]
   pageMarginsSelect: [margins: PageMargins]
   tableInsert: [size: TableSize]
-  tableHeaderToggle: []
   tableNumberedToggle: []
   tableColumnSettings: []
-  tableBorderChange: [change: TableBorderChange]
-  tableCellEdit: [action: TableCellAction]
+  tableBordersOpen: []
   tableCellAlign: [alignment: TableCellAlignment]
+  tableCellLine: [line: CellLine | null]
 }>()
 
 const symmetricMargins = (vertical: number, horizontal: number): PageMargins => ({
@@ -75,7 +73,6 @@ const inlineFormatButtons = [
   { format: 'italic', symbol: 'I', label: '斜体' },
   { format: 'underline', symbol: 'U', label: '下划线' },
 ] as const
-const tableCellLabels: Record<TableCellAction, string> = { merge: '合并单元格', split: '拆分单元格' }
 const fontSizes = [8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72]
 const fontSizeControl = ref<HTMLElement | null>(null)
 const fontSizeMenu = ref<InstanceType<typeof ElDropdown> | null>(null)
@@ -309,33 +306,28 @@ onBeforeUnmount(clearSingleClickTimer)
             <span class="word-ribbon-group-title">字体</span>
           </section>
           <WordTableTools
-            v-model:show-table-gridlines="showTableGridlines"
             :disabled="!canInsertTable"
-            :header="tableHeader"
             :numbered="tableNumbered"
-            :borders="tableBorders"
             @insert="emit('tableInsert', $event)"
-            @toggle-header="emit('tableHeaderToggle')"
             @toggle-numbered="emit('tableNumberedToggle')"
             @column-settings="emit('tableColumnSettings')"
-            @border-change="emit('tableBorderChange', $event)"
+            @open-borders="emit('tableBordersOpen')"
           />
           <section class="word-ribbon-group" aria-label="单元格">
             <div class="word-ribbon-group-content">
-              <ElButton
-                text
-                class="word-page-setup-button word-cell-edit-button"
-                :class="{ 'is-merge': tableCellAction === 'merge' }"
-                :disabled="!tableCellAction"
-                @mousedown.prevent
-                @click="tableCellAction && emit('tableCellEdit', tableCellAction)"
-              >
-                <span class="word-cell-edit-icon" aria-hidden="true" />
-                <span>{{ tableCellAction ? tableCellLabels[tableCellAction] : '合并/拆分单元格' }}</span>
-              </ElButton>
               <WordCellAlignment :state="tableCellAlignment" @align="emit('tableCellAlign', $event)" />
             </div>
             <span class="word-ribbon-group-title">单元格</span>
+          </section>
+          <section class="word-ribbon-group" aria-label="画线">
+            <div class="word-ribbon-group-content">
+              <WordCellLines
+                v-model:show-table-gridlines="showTableGridlines"
+                :state="tableCellLine"
+                @line="emit('tableCellLine', $event)"
+              />
+            </div>
+            <span class="word-ribbon-group-title">画线</span>
           </section>
           <section class="word-ribbon-group" aria-label="显示">
             <div class="word-ribbon-group-content">

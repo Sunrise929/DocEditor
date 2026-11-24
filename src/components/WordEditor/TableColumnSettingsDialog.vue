@@ -7,7 +7,7 @@ import 'element-plus/es/components/dialog/style/css'
 import 'element-plus/es/components/input-number/style/css'
 import { computed, ref, shallowRef, useId } from 'vue'
 import {
-  balanceColumnLayout, MIN_SUBJECT_WIDTH, toCentimeters, toColumnUnits, type TableColumnLayout, type TableColumnSettings,
+  balanceColumnLayout, MIN_SUBJECT_WIDTH, COLUMN_WIDTH_TOLERANCE, type TableColumnLayout, type TableColumnSettings,
 } from './tableColumnLayout'
 
 const props = defineProps<{ apply: (layout: TableColumnLayout) => boolean }>()
@@ -70,7 +70,7 @@ const updateColumn = (index: number, value: number | null | undefined) => {
   }
   const columns = linked.value.includes(index) ? linked.value : [index]
   const widths = [...current.layout.widths]
-  for (const column of columns) widths[column] = toColumnUnits(value)
+  for (const column of columns) widths[column] = value
   updateLayout({ ...current.layout, widths })
 }
 
@@ -81,13 +81,13 @@ const updateIndent = (value: number | null | undefined) => {
     error.value = '请输入不小于 0 的左缩进。'
     return
   }
-  updateLayout({ ...current.layout, indentLeft: toColumnUnits(value) })
+  updateLayout({ ...current.layout, indentLeft: value })
 }
 
 const submit = () => {
   if (!draft.value || error.value) return
   const { layout, subjectIndex } = draft.value
-  if (layout.widths[balanceIndex.value]! < MIN_SUBJECT_WIDTH) {
+  if (layout.widths[balanceIndex.value]! < MIN_SUBJECT_WIDTH - COLUMN_WIDTH_TOLERANCE) {
     error.value = subjectIndex === null ? '表格至少需要 0.20 厘米宽。请减小左缩进。' : subjectError
     return
   }
@@ -114,7 +114,7 @@ defineExpose({ show })
     v-model="visible"
     class="word-table-column-dialog"
     title="表格列宽与缩进"
-    width="min(480px, calc(100vw - 32px))"
+    width="min(360px, calc(100vw - 32px))"
     align-center
     append-to-body
     destroy-on-close
@@ -130,7 +130,7 @@ defineExpose({ show })
           :disabled="editableColumns.length === 0"
           @change="linkAll"
         >全选联动列</ElCheckbox>
-        <span>表格宽度 {{ toCentimeters(draft.availableWidth - draft.layout.indentLeft).toFixed(2) }} 厘米</span>
+        <span>表格宽度 {{ (draft.availableWidth - draft.layout.indentLeft).toFixed(2) }} 厘米</span>
       </div>
 
       <p v-if="draft.subjectIndex === null" class="word-table-column-note">序号表的第 2 列是科目列。当前仅有一列，列宽随表格宽度调整。</p>
@@ -149,7 +149,7 @@ defineExpose({ show })
             :id="`${formId}-column-${index}`"
             :name="`column-${index + 1}`"
             :aria-label="`第 ${index + 1} 列宽度（厘米）`"
-            :model-value="toCentimeters(width)"
+            :model-value="width"
             :disabled="index === balanceIndex"
             :controls="index !== balanceIndex"
             :step="0.01"
@@ -174,7 +174,7 @@ defineExpose({ show })
           :id="`${formId}-indent`"
           name="table-indent"
           aria-label="表格左缩进（厘米）"
-          :model-value="toCentimeters(draft.layout.indentLeft)"
+          :model-value="draft.layout.indentLeft"
           :step="0.01"
           :precision="2"
           :value-on-clear="null"
@@ -197,6 +197,8 @@ defineExpose({ show })
 
 <style scoped>
 .word-table-column-form {
+  --word-table-column-input-width: 144px;
+
   display: grid;
   gap: 12px;
 }
@@ -220,7 +222,7 @@ defineExpose({ show })
 
 .word-table-column-field {
   display: grid;
-  grid-template-columns: 20px 58px minmax(0, 1fr) 52px;
+  grid-template-columns: 20px 58px minmax(0, var(--word-table-column-input-width)) 52px;
   align-items: center;
   gap: 8px;
 }
@@ -241,7 +243,7 @@ defineExpose({ show })
 
 .word-table-column-indent {
   display: grid;
-  grid-template-columns: 86px minmax(0, 1fr) 52px;
+  grid-template-columns: 86px minmax(0, var(--word-table-column-input-width)) 52px;
   align-items: center;
   gap: 8px;
   border-top: 1px solid #e5e7eb;

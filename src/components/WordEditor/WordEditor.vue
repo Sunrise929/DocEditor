@@ -8,34 +8,37 @@ import { Fragment, Slice, type Node as ProseMirrorNode } from '@tiptap/pm/model'
 import { Plugin, Selection, TextSelection, type Transaction } from '@tiptap/pm/state'
 import { CellSelection } from '@tiptap/pm/tables'
 import { canJoin } from '@tiptap/pm/transform'
+import { ElMessage } from 'element-plus'
+import 'element-plus/es/components/message/style/css'
 import { EditorContent, useEditor } from '@tiptap/vue-3'
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import WordRulers from '../WordRulers/WordRulers.vue'
+import WordTableContextMenu from './WordTableContextMenu.vue'
 import WordTableInsertControls from './WordTableInsertControls.vue'
 import WordTableResizeControls from './WordTableResizeControls.vue'
+import TableBordersDialog from './TableBordersDialog.vue'
 import TableColumnSettingsDialog from './TableColumnSettingsDialog.vue'
 import {
   BlockFontSize, InlineTextStyle, parseFontSize, readSelectionFontSize, setFontSizeAtCursor, setFontSizeInCells,
 } from './blockFontSize'
+import { isEmptyCell, ProtectRuledCells, readCellLine, type CellLine, type CellLineState } from './cellLines'
 import { blockStyleOptions, DocumentHeading, isHeadingLevel, type DocumentBlockStyle } from './documentHeading'
 import {
-  DocumentTable, DocumentTableCell, DocumentTableHeader, hasHeaderRow, PreventNestedTables,
-  readTableIndent, tableAtSelection, tableCellCommands, tableColumnFractions, toggleFirstRowHeader,
-  type TableCellAction, type TableCellAlignment, type TableCellAlignmentState,
+  DocumentTable, DocumentTableCell, DocumentTableRow, PreventNestedTables,
+  readTableColumnWidths, readTableIndent, tableAtSelection,
+  type TableCellAlignment, type TableCellAlignmentState,
 } from './documentTable'
 import { inlineFormatCommands, type InlineFormat, type InlineFormatState } from './inlineFormatting'
 import {
-  cellAtPosition, cellTextBox, readTableRuler, resizeTableColumns, type ColumnResizeTarget, type TableRulerContext,
+  cellAtPosition, cellTextBox, readTableRuler, resizeTableColumns, resizeTableColumnsFromPixels,
+  type ColumnResizeTarget, type TableRulerContext,
 } from './tableRuler'
-import { changeTableBorders, readTableBorders, type TableBorderChange, type TableBorders } from './tableBorders'
-import {
-  toCentimeters, toColumnPixels, toColumnUnits, widthUnitsFromFractions,
-  type TableColumnLayout, type TableColumnSettings,
-} from './tableColumnLayout'
+import { readTableBorders, sameTableBorders, type TableBorders } from './tableBorders'
+import type { TableColumnLayout, TableColumnSettings } from './tableColumnLayout'
 import { isValidTableSize, type TableSize } from './tableSize'
 import {
-  DEFAULT_PAGE_MARGINS, fitPageMargins, pageDimensions, readPageOrientation,
-  samePageMargins, validPageMargins, type PageMargins, type PageOrientation,
+  DEFAULT_PAGE_MARGINS, fitPageMargins, marginValue, pageContentWidthCm, pageDimensions,
+  readPageMargins, readPageOrientation, samePageMargins, validPageMargins, type PageMargins, type PageOrientation,
 } from './pageGeometry'
 import { adjustCellIndent, adjustIndent, indentDefaults, type IndentHandle, type ParagraphIndent } from '../WordRulers/paragraphIndent'
 
@@ -48,11 +51,9 @@ const emit = defineEmits<{
   pageOrientationChange: [orientation: PageOrientation]
   pageMarginsChange: [margins: PageMargins]
   tableInsertionAvailabilityChange: [available: boolean]
-  tableHeaderChange: [header: boolean | null]
   tableNumberedChange: [numbered: boolean | null]
-  tableBordersChange: [borders: TableBorders | null]
-  tableCellActionChange: [action: TableCellAction | null]
   tableCellAlignmentChange: [state: TableCellAlignmentState]
+  tableCellLineChange: [state: CellLineState]
 }>()
 
 const props = withDefaults(defineProps<{
@@ -80,6 +81,8 @@ const documentWidth = ref(currentPageDimensions.value.width)
 let layoutDoc: ProseMirrorNode | undefined
 let pageOrientations: PageOrientation[] = []
 const paragraphIndent = ref<ParagraphIndent | null>(null)
+const tableBordersDialog = ref<InstanceType<typeof TableBordersDialog> | null>(null)
+let tableBordersTarget: { position: number; node: ProseMirrorNode } | null = null
 const tableColumnDialog = ref<InstanceType<typeof TableColumnSettingsDialog> | null>(null)
 let tableColumnTarget: { position: number; node: ProseMirrorNode; settings: TableColumnSettings } | null = null
 const tableRuler = shallowRef<TableRulerContext | null>(null)
@@ -234,31 +237,29 @@ const readTableCellAlignment = (selection: Selection): TableCellAlignmentState =
   return result
 }
 
+const readCellLineState = (selection: Selection): CellLineState => {
+  const result: CellLineState = { available: false, line: null, canRemove: false }
+  forEachCellAtSelection(selection, cell => {
+    const line = readCellLine(cell.attrs.cellLine)
+    if (!result.available) result.line = line
+    else if (result.line !== line) result.line = null
+    result.canRemove ||= line !== null
+    result.available = true
+  })
+  return result
+}
+
 const syncTableTools = (instance: Editor) => {
   const { state } = instance
   const table = tableAtSelection(state.selection)
-  const mergeAvailable = table && tableCellCommands.merge(state)
-  const splitAvailable = table && !mergeAvailable && tableCellCommands.split(state)
-  emit('tableCellActionChange', mergeAvailable ? 'merge' : splitAvailable ? 'split' : null)
   emit('tableCellAlignmentChange', readTableCellAlignment(state.selection))
+  emit('tableCellLineChange', readCellLineState(state.selection))
   emit('tableInsertionAvailabilityChange', !table)
-  emit('tableHeaderChange', table ? hasHeaderRow(table.node) : null)
   emit('tableNumberedChange', table ? table.node.attrs.isNumbered === true : null)
-  emit('tableBordersChange', table ? readTableBorders(table.node.attrs.borders) : null)
   refreshTableRuler()
 }
 
-const marginValue = (value: unknown, fallback: number) => {
-  const parsed = Number(value)
-  return Number.isFinite(parsed) ? parsed : fallback
-}
-
-const pageMarginsFromNode = (node: ProseMirrorNode): PageMargins => ({
-  marginTop: marginValue(node.attrs.marginTop, DEFAULT_PAGE_MARGINS.marginTop),
-  marginRight: marginValue(node.attrs.marginRight, DEFAULT_PAGE_MARGINS.marginRight),
-  marginBottom: marginValue(node.attrs.marginBottom, DEFAULT_PAGE_MARGINS.marginBottom),
-  marginLeft: marginValue(node.attrs.marginLeft, DEFAULT_PAGE_MARGINS.marginLeft),
-})
+const pageMarginsFromNode = (node: ProseMirrorNode) => readPageMargins(node.attrs)
 
 const pageAtPosition = (
   doc: ProseMirrorNode,
@@ -890,11 +891,13 @@ const editor = useEditor({
       table: false,
       tableCell: false,
       tableHeader: false,
+      tableRow: false,
     }),
     DocumentTable,
     DocumentTableCell,
-    DocumentTableHeader,
+    DocumentTableRow,
     PreventNestedTables,
+    ProtectRuledCells,
     DocumentCodeBlock,
     DocumentHeading,
     BlockIndentation,
@@ -995,7 +998,7 @@ const updateTableColumns = (table: TableRulerContext['table'], widths: number[])
   if (!instance) return
   const active = tableAtSelection(instance.state.selection)
   if (!active || active.node !== table) return
-  const transaction = resizeTableColumns(instance.state, active.start - 1, table, widths)
+  const transaction = resizeTableColumnsFromPixels(instance.state, active.start - 1, table, widths)
   if (transaction) instance.view.dispatch(closeHistory(transaction))
 }
 
@@ -1163,16 +1166,54 @@ const insertTable = (size: TableSize) => {
   if (inserted) instance.view.focus()
 }
 
-const setTableBorders = (change: TableBorderChange) => {
+const showTableBorders = () => {
+  const instance = editor.value
+  const dialog = tableBordersDialog.value
+  if (!instance || !dialog) return
+  const table = tableAtSelection(instance.state.selection)
+  if (!table) return
+
+  tableBordersTarget = { position: table.start - 1, node: table.node }
+  dialog.show(readTableBorders(table.node.attrs.borders))
+}
+
+const applyTableBorders = (draft: TableBorders) => {
+  const instance = editor.value
+  const target = tableBordersTarget
+  if (!instance || !target) return false
+  const { state, view } = instance
+  const { position, node } = target
+  if (state.doc.nodeAt(position) !== node) return false
+
+  const borders = readTableBorders(draft)
+  if (!sameTableBorders(readTableBorders(node.attrs.borders), borders)) {
+    view.dispatch(closeHistory(state.tr.setNodeAttribute(position, 'borders', borders)))
+  }
+  return true
+}
+
+const closeTableBorders = () => {
+  tableBordersTarget = null
+  const instance = editor.value
+  if (instance && !instance.isDestroyed) instance.view.focus()
+}
+
+const setTableCellLine = (line: CellLine | null) => {
   const instance = editor.value
   if (!instance) return
   const { state, view } = instance
-  const table = tableAtSelection(state.selection)
-  if (!table) return
+  const transaction = state.tr
+  let hasContent = false
+  forEachCellAtSelection(state.selection, (cell, position) => {
+    if (line && !isEmptyCell(cell)) hasContent = true
+    if (cell.attrs.cellLine !== line) transaction.setNodeAttribute(position, 'cellLine', line)
+  })
+  if (hasContent) {
+    ElMessage.warning({ message: '画线只适用于空单元格，选区中有内容。', grouping: true })
+    return
+  }
 
-  const borders = changeTableBorders(readTableBorders(table.node.attrs.borders), change)
-  const transaction = state.tr.setNodeAttribute(table.start - 1, 'borders', borders)
-  if (!transaction.doc.eq(state.doc)) view.dispatch(closeHistory(transaction))
+  if (transaction.docChanged) view.dispatch(closeHistory(transaction))
   view.focus()
 }
 
@@ -1197,24 +1238,6 @@ const alignTableCells = (requested: TableCellAlignment) => {
   view.focus()
 }
 
-const editTableCells = (action: TableCellAction) => {
-  const instance = editor.value
-  if (!instance) return
-  const { state, view } = instance
-  const changed = tableCellCommands[action](state, transaction => view.dispatch(closeHistory(transaction)))
-  if (changed) view.focus()
-}
-
-const toggleTableHeader = () => {
-  const instance = editor.value
-  if (!instance) return
-  const transaction = toggleFirstRowHeader(instance.state)
-  if (!transaction?.docChanged) return
-
-  instance.view.dispatch(closeHistory(transaction))
-  instance.view.focus()
-}
-
 const toggleTableNumbered = () => {
   const instance = editor.value
   if (!instance) return
@@ -1229,10 +1252,7 @@ const toggleTableNumbered = () => {
 
 const columnSettingsPageWidth = (doc: ProseMirrorNode, position: number) => {
   const page = pageAtPosition(doc, position)
-  if (!page) return null
-  const { width } = pageDimensions(readPageOrientation(page.node.attrs.orientation))
-  const { marginLeft, marginRight } = pageMarginsFromNode(page.node)
-  return toColumnUnits((width - marginLeft - marginRight) / 10)
+  return page ? pageContentWidthCm(page.node.attrs) : null
 }
 
 const showTableColumnSettings = () => {
@@ -1245,9 +1265,10 @@ const showTableColumnSettings = () => {
   const availableWidth = columnSettingsPageWidth(state.doc, table.start)
   if (availableWidth === null) return
 
-  const indentLeft = toColumnUnits(readTableIndent(table.node.attrs.indentLeft))
-  const widths = widthUnitsFromFractions(tableColumnFractions(table.node), Math.max(0, availableWidth - indentLeft))
+  const indentLeft = readTableIndent(table.node.attrs.indentLeft)
+  const widths = readTableColumnWidths(table.node)
   if (!widths.length) return
+  if (indentLeft >= availableWidth) widths.fill(0)
 
   const settings: TableColumnSettings = {
     availableWidth,
@@ -1270,10 +1291,9 @@ const applyTableColumnSettings = (layout: TableColumnLayout) => {
   if (layout.indentLeft === settings.layout.indentLeft
     && layout.widths.every((width, index) => width === settings.layout.widths[index])) return true
 
-  const widths = layout.widths.map(toColumnPixels)
-  const transaction = resizeTableColumns(state, position, node, widths) ?? state.tr
+  const transaction = resizeTableColumns(state, position, node, layout.widths) ?? state.tr
   if (layout.indentLeft !== settings.layout.indentLeft) {
-    transaction.setNodeAttribute(position, 'indentLeft', toCentimeters(layout.indentLeft))
+    transaction.setNodeAttribute(position, 'indentLeft', layout.indentLeft)
   }
   if (transaction.docChanged) view.dispatch(closeHistory(transaction))
   return true
@@ -1304,7 +1324,7 @@ const toggleInlineFormat = (format: InlineFormat) => {
 defineExpose({
   getJSON, undo, redo, setBlockStyle, setBlockFontSize, toggleInlineFormat,
   setCurrentPageOrientation, setCurrentPageMargins, insertTable,
-  toggleTableHeader, toggleTableNumbered, setTableBorders, showTableColumnSettings, editTableCells, alignTableCells,
+  toggleTableNumbered, showTableBorders, showTableColumnSettings, alignTableCells, setTableCellLine,
 })
 </script>
 
@@ -1340,11 +1360,13 @@ defineExpose({
     <main class="document-workspace">
       <EditorContent v-if="editor" :editor="editor" class="paginated-editor" />
     </main>
+    <TableBordersDialog ref="tableBordersDialog" :apply="applyTableBorders" @closed="closeTableBorders" />
     <TableColumnSettingsDialog
       ref="tableColumnDialog"
       :apply="applyTableColumnSettings"
       @closed="closeTableColumnSettings"
     />
+    <WordTableContextMenu v-if="editor" :editor="editor" />
     <WordTableInsertControls v-if="editor" :editor="editor" />
     <WordTableResizeControls
       v-if="editor"

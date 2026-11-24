@@ -166,26 +166,6 @@
   background: #e9f1fd;
 }
 
-.word-cell-edit-button.el-button {
-  min-width: 110px;
-}
-
-.word-cell-edit-icon {
-  width: 36px;
-  height: 30px;
-  border: 2px solid #394150;
-  border-radius: 2px;
-  background: linear-gradient(#394150, #394150) center / 1px 100% no-repeat, #eef2f8;
-}
-
-.word-cell-edit-button.is-merge .word-cell-edit-icon {
-  background: #e3edfa;
-}
-
-.word-cell-edit-button.is-disabled .word-cell-edit-icon {
-  opacity: 0.4;
-}
-
 .word-page-setup-label {
   display: flex;
   align-items: center;

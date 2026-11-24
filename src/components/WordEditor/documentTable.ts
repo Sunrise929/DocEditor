@@ -1,10 +1,14 @@
-import { Extension, findParentNodeClosestToPos, mergeAttributes, type Attributes } from '@tiptap/core'
-import { Table, TableCell, TableHeader, TableView } from '@tiptap/extension-table'
+import { Extension, findParentNodeClosestToPos, mergeAttributes, type Attributes, type CommandProps } from '@tiptap/core'
+import { Table, TableCell, TableRow, TableView } from '@tiptap/extension-table'
 import { isHistoryTransaction } from '@tiptap/pm/history'
 import type { DOMOutputSpec, Node as ProseMirrorNode } from '@tiptap/pm/model'
-import { NodeSelection, Plugin, type Command, type EditorState, type Selection } from '@tiptap/pm/state'
-import { CellSelection, mergeCells, splitCell, TableMap } from '@tiptap/pm/tables'
+import { NodeSelection, Plugin, PluginKey, type Command, type Selection } from '@tiptap/pm/state'
+import { CellSelection, cellAround, mergeCells, selectedRect, splitCell, TableMap } from '@tiptap/pm/tables'
 
+import { cellLineAttribute } from './cellLines'
+import { readTableHeaderRows, toggleTableHeaderRows } from './tableHeaderRows'
+import { pageContentWidthCm } from './pageGeometry'
+import { COLUMN_WIDTH_TOLERANCE, pixelsToCentimeters, setTableColumnWidths } from './tableColumnLayout'
 import { defaultTableBorders, parseTableBorders, readTableBorders, tableBorderCss, tableBorderPlugin } from './tableBorders'
 
 export const MIN_TABLE_COLUMN_WIDTH = 18
@@ -30,7 +34,8 @@ const tableLayout = (node: ProseMirrorNode) => {
   }
 }
 
-const tableColumnWidths = (node: ProseMirrorNode) => {
+// Each entry is the width in centimeters of one logical column in the cell.
+export const readTableColumnWidths = (node: ProseMirrorNode) => {
   const widths: number[] = []
   node.firstChild?.forEach(cell => {
     const colwidth = cell.attrs.colwidth as number[] | null
@@ -42,14 +47,19 @@ const tableColumnWidths = (node: ProseMirrorNode) => {
   return widths
 }
 
-// Treat saved column widths as proportions when the page's available width changes.
-export const tableColumnFractions = (node: ProseMirrorNode) => {
-  const widths = tableColumnWidths(node)
+export const effectiveTableColumnWidths = (node: ProseMirrorNode) => {
+  const widths = readTableColumnWidths(node)
   const fixed = widths.filter(width => width > 0)
   const fixedWidth = fixed.reduce((sum, width) => sum + width, 0)
   const autoWidth = fixed.length ? fixedWidth / fixed.length : 1
-  const totalWidth = fixedWidth + (widths.length - fixed.length) * autoWidth
-  return widths.map(width => (width || autoWidth) / totalWidth)
+  return widths.map(width => width || autoWidth)
+}
+
+// Treat saved column widths as proportions when the page's available width changes.
+export const tableColumnFractions = (node: ProseMirrorNode) => {
+  const widths = effectiveTableColumnWidths(node)
+  const total = widths.reduce((sum, width) => sum + width, 0)
+  return widths.map(width => width / total)
 }
 
 class DocumentTableView extends TableView {
@@ -76,7 +86,76 @@ class DocumentTableView extends TableView {
   }
 }
 
+const normalizeWidths = new PluginKey('tableColumnWidths')
+
+const normalizeTableColumnWidths = () => {
+  const checkedPages = new WeakSet<ProseMirrorNode>()
+  return new Plugin({
+    key: normalizeWidths,
+    appendTransaction(transactions, _previous, state) {
+      if (!transactions.some(tr => tr.docChanged || tr.getMeta(normalizeWidths))) return null
+      const tr = state.tr
+
+      state.doc.forEach((page, pagePos) => {
+        if (page.type.name !== 'page' || checkedPages.has(page)) return
+        const pageWidth = pageContentWidthCm(page.attrs)
+        page.forEach((table, offset) => {
+          if (!isTable(table)) return
+          const availableWidth = pageWidth - readTableIndent(table.attrs.indentLeft)
+          if (availableWidth <= 0) return
+
+          const stored = readTableColumnWidths(table)
+          const total = stored.reduce((sum, width) => sum + width, 0)
+          if (Math.abs(total - availableWidth) < COLUMN_WIDTH_TOLERANCE && stored.every(width => width > 0)) return
+
+          const widths = effectiveTableColumnWidths(table)
+          const scale = availableWidth / widths.reduce((sum, width) => sum + width, 0)
+          setTableColumnWidths(tr, pagePos + 1 + offset, table, widths.map(width => width * scale))
+        })
+      })
+      tr.doc.forEach(page => checkedPages.add(page))
+      return tr.docChanged ? tr : null
+    },
+  })
+}
+
 export const DocumentTable = Table.extend({
+  addCommands() {
+    const inherited = this.parent?.()
+    const toggleHeaderRow = () => ({ state, tr, dispatch }: CommandProps) => {
+      const { selection } = state
+      const cell = cellAround(selection.$head)
+      if (!(selection instanceof CellSelection) && !cell) return false
+
+      const rect = selectedRect(state)
+      const top = selection instanceof CellSelection ? rect.top : cell!.index(-1)
+      const bottom = selection instanceof CellSelection ? rect.bottom : top + 1
+      if (dispatch) toggleTableHeaderRows(tr, readTableHeaderRows(rect.table, rect.tableStart, top, bottom))
+      return true
+    }
+    return {
+      ...inherited,
+      insertTable: (options = {}) => props => {
+        const inserted = inherited?.insertTable?.({ ...options, withHeaderRow: false })(props) ?? false
+        if (inserted && props.dispatch && options.withHeaderRow !== false) {
+          const table = tableAtSelection(props.tr.selection)
+          if (table) props.tr.setNodeAttribute(table.start, 'isHeader', true)
+        }
+        return inserted
+      },
+      toggleHeaderRow,
+      toggleHeader: (type: 'row' | 'column' | 'cell') => type === 'row' ? toggleHeaderRow() : () => false,
+      toggleHeaderCell: () => () => false,
+      toggleHeaderColumn: () => () => false,
+    }
+  },
+
+  onCreate(event) {
+    this.parent?.(event)
+    const { state, view } = this.editor
+    view.dispatch(state.tr.setMeta(normalizeWidths, true).setMeta('addToHistory', false))
+  },
+
   addAttributes() {
     return {
       ...this.parent?.(),
@@ -115,7 +194,7 @@ export const DocumentTable = Table.extend({
   },
 
   addProseMirrorPlugins() {
-    return [...(this.parent?.() ?? []), tableBorderPlugin()]
+    return [...(this.parent?.() ?? []), normalizeTableColumnWidths(), tableBorderPlugin()]
   },
 
   renderHTML({ node, HTMLAttributes }) {
@@ -164,17 +243,29 @@ const alignmentAttribute = (key: keyof TableCellAlignment, property: string, all
   },
 })
 
+const parseColumnWidths = (value: string | null) => {
+  if (!value) return null
+  const widths = value.split(',').map(Number)
+  return widths.every(width => Number.isFinite(width) && width >= 0) ? widths : null
+}
+
 const documentCellAttributes = (attributes: Attributes = {}): Attributes => ({
   ...attributes,
+  cellLine: cellLineAttribute,
   verticalAlign: alignmentAttribute('verticalAlign', 'vertical-align', verticalAlignments, 'top'),
   textAlign: alignmentAttribute('textAlign', 'text-align', horizontalAlignments, 'left'),
   colwidth: {
     ...attributes.colwidth,
     parseHTML: (element: HTMLElement) => {
-      const widths = element.getAttribute('colwidth')?.split(',').map(Number)
-      if (widths?.every(width => Number.isFinite(width) && width >= 0)) return widths
-      return attributes.colwidth?.parseHTML?.(element) ?? null
+      const widthsCm = parseColumnWidths(element.getAttribute('data-colwidth-cm'))
+      if (widthsCm) return widthsCm
+
+      const legacyWidths = parseColumnWidths(element.getAttribute('colwidth'))
+        ?? parseColumnWidths(element.getAttribute('data-colwidth'))
+        ?? attributes.colwidth?.parseHTML?.(element)
+      return Array.isArray(legacyWidths) ? legacyWidths.map(pixelsToCentimeters) : null
     },
+    renderHTML: attrs => attrs.colwidth ? { 'data-colwidth-cm': attrs.colwidth.join(',') } : {},
   },
 })
 
@@ -184,12 +275,22 @@ export const DocumentTableCell = TableCell.extend({
   },
 })
 
-export const DocumentTableHeader = TableHeader.extend({
+export const DocumentTableRow = TableRow.extend({
+  content: 'tableCell*',
+
   addAttributes() {
-    return documentCellAttributes(this.parent?.())
+    return {
+      ...this.parent?.(),
+      isHeader: {
+        default: false,
+        parseHTML: element => element.getAttribute('data-table-header') === 'true',
+        renderHTML: attrs => attrs.isHeader === true ? {
+          'data-table-header': 'true',
+          style: 'background-color: #edf3fa; font-weight: 700',
+        } : {},
+      },
+    }
   },
-}).configure({
-  HTMLAttributes: { style: 'background-color: var(--table-cell-selection, #edf3fa)' },
 })
 
 const isTable = (node: ProseMirrorNode) => node.type.name === 'table'
@@ -211,7 +312,7 @@ const mergeCellsWithColumnWidths: Command = (state, dispatch) => {
   const { left, right } = TableMap.get(table.node).rectBetween(
     selection.$anchorCell.pos - table.start, selection.$headCell.pos - table.start,
   )
-  const widths = tableColumnWidths(table.node).slice(left, right)
+  const widths = readTableColumnWidths(table.node).slice(left, right)
   return mergeCells(state, transaction => {
     // A merge can remove every cell that stored a column's width.
     if (widths.some(width => width > 0) && transaction.selection instanceof CellSelection) {
@@ -223,24 +324,6 @@ const mergeCellsWithColumnWidths: Command = (state, dispatch) => {
 
 export const tableCellCommands = { merge: mergeCellsWithColumnWidths, split: splitCell }
 export type TableCellAction = keyof typeof tableCellCommands
-
-export const hasHeaderRow = (table: ProseMirrorNode) =>
-  table.firstChild?.children.every(cell => cell.type.spec.tableRole === 'header_cell') ?? false
-
-export const toggleFirstRowHeader = (state: EditorState) => {
-  const table = tableAtSelection(state.selection)
-  const row = table?.node.firstChild
-  if (!table || !row) return null
-
-  const target = state.schema.nodes[hasHeaderRow(table.node) ? 'tableCell' : 'tableHeader']
-  if (!target) return null
-
-  const transaction = state.tr
-  row.forEach((cell, offset) => {
-    if (cell.type !== target) transaction.setNodeMarkup(table.start + 1 + offset, target, cell.attrs, cell.marks)
-  })
-  return transaction
-}
 
 type TableCounts = { tables: number; nested: number }
 

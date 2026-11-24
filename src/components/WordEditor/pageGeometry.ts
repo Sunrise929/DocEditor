@@ -23,6 +23,24 @@ export const readPageOrientation = (value: unknown): PageOrientation =>
 export const pageDimensions = (orientation: PageOrientation) =>
   orientation === 'landscape' ? { width: 297, height: 210 } : { width: 210, height: 297 }
 
+export const marginValue = (value: unknown, fallback: number) => {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : fallback
+}
+
+export const readPageMargins = (attrs: Record<string, unknown>): PageMargins => ({
+  marginTop: marginValue(attrs.marginTop, DEFAULT_PAGE_MARGINS.marginTop),
+  marginRight: marginValue(attrs.marginRight, DEFAULT_PAGE_MARGINS.marginRight),
+  marginBottom: marginValue(attrs.marginBottom, DEFAULT_PAGE_MARGINS.marginBottom),
+  marginLeft: marginValue(attrs.marginLeft, DEFAULT_PAGE_MARGINS.marginLeft),
+})
+
+export const pageContentWidthCm = (attrs: Record<string, unknown>) => {
+  const { width } = pageDimensions(readPageOrientation(attrs.orientation))
+  const { marginLeft, marginRight } = readPageMargins(attrs)
+  return (width - marginLeft - marginRight) / 10
+}
+
 export const samePageMargins = (first: PageMargins, second: PageMargins) =>
   first.marginTop === second.marginTop && first.marginRight === second.marginRight
   && first.marginBottom === second.marginBottom && first.marginLeft === second.marginLeft

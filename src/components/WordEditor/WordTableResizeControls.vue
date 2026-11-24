@@ -6,9 +6,11 @@ import type { Transaction } from '@tiptap/pm/state'
 import { TableMap } from '@tiptap/pm/tables'
 import { onBeforeUnmount, onMounted, shallowRef } from 'vue'
 import { readTableRowHeight } from './documentTable'
+import { effectiveTableColumnWidths } from './documentTable'
+import { centimetersToPixels } from './tableColumnLayout'
 import { readTableColumns, TABLE_EDGE_HIT_DISTANCE, visibleTableBounds } from './tableGeometry'
 import {
-  cellAtPosition, resizeAdjacentColumns, resizeTableColumns, rowAtTableY, type ColumnResizeTarget,
+  cellAtPosition, resizeAdjacentColumns, resizeTableColumnsFromPixels, rowAtTableY, type ColumnResizeTarget,
 } from './tableRuler'
 
 const props = defineProps<{ editor: Editor }>()
@@ -163,7 +165,10 @@ const startDrag = (event: PointerEvent) => {
   if (border.axis === 'column') {
     const measured = readTableColumns(element, map.width)
     if (!measured) return
-    drag = { ...origin, borderStart: measured.edges[border.index]!, axis: 'column', index: border.index, widths: measured.widths }
+    drag = {
+      ...origin, borderStart: measured.edges[border.index]!, axis: 'column', index: border.index,
+      widths: effectiveTableColumnWidths(table.node).map(centimetersToPixels),
+    }
   } else {
     const index = border.index - 1
     const row = table.node.child(index)
@@ -200,7 +205,7 @@ const finishDrag = (event: PointerEvent) => {
   if (active.axis === 'column') {
     const widths = columnWidthsAt(active, event)
     if (widths[active.index - 1] === active.widths[active.index - 1]) return
-    const transaction = resizeTableColumns(state, active.tablePos, active.tableNode, widths)
+    const transaction = resizeTableColumnsFromPixels(state, active.tablePos, active.tableNode, widths)
     if (transaction) view.dispatch(closeHistory(transaction))
   } else {
     const height = rowHeightAt(active, event)

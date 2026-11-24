@@ -78,7 +78,6 @@ defineExpose({ show })
     append-to-body
     destroy-on-close
     :close-on-click-modal="false"
-    :show-close="false"
     @opened="focusFirstMargin"
     @closed="applyAfterClose"
   >

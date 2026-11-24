@@ -1,9 +1,10 @@
 import { findParentNodeClosestToPos } from '@tiptap/core'
 import type { Node as ProseMirrorNode, ResolvedPos } from '@tiptap/pm/model'
-import { CellSelection, TableMap } from '@tiptap/pm/tables'
-import type { EditorState } from '@tiptap/pm/state'
+import { CellSelection, selectedRect, TableMap } from '@tiptap/pm/tables'
+import type { Command, EditorState } from '@tiptap/pm/state'
 import type { EditorView } from '@tiptap/pm/view'
-import { MIN_TABLE_COLUMN_WIDTH, readTableIndent, tableAtSelection } from './documentTable'
+import { effectiveTableColumnWidths, MIN_TABLE_COLUMN_WIDTH, readTableIndent, tableAtSelection } from './documentTable'
+import { centimetersToPixels, pixelsToCentimeters, setTableColumnWidths } from './tableColumnLayout'
 import { readTableColumns } from './tableGeometry'
 
 export type TableRulerContext = {
@@ -59,7 +60,8 @@ export const readTableRuler = (view: EditorView, pageWidth: number, target?: Tab
   const map = TableMap.get(table.node)
   const columns = readTableColumns(element, map.width)
   if (!columns) return null
-  const { edges, widths } = columns
+  const { edges } = columns
+  const widths = effectiveTableColumnWidths(table.node).map(centimetersToPixels)
   const pixelsPerMm = page.width / pageWidth
   const mm = (x: number) => (x - page.left) / pixelsPerMm
 
@@ -115,24 +117,37 @@ export const resizeTableColumns = (
 ) => {
   const table = state.doc.nodeAt(tablePos)
   if (table !== originalTable) return null
-  const map = TableMap.get(table)
-  if (widths.length !== map.width) return null
-
   const tr = state.tr
-  const firstColumns = new Map<number, number>()
-  map.map.forEach((offset, index) => {
-    if (!firstColumns.has(offset)) firstColumns.set(offset, index % map.width)
-  })
-  table.forEach((row, rowOffset) => {
-    row.forEach((cell, cellOffset) => {
-      const offset = rowOffset + 1 + cellOffset
-      const column = firstColumns.get(offset)
-      if (column === undefined) return
-      const colwidth = widths.slice(column, column + cell.attrs.colspan)
-      const previous = cell.attrs.colwidth as number[] | null
-      if (previous?.length === colwidth.length && colwidth.every((width, i) => width === previous[i])) return
-      tr.setNodeAttribute(tablePos + 1 + offset, 'colwidth', colwidth)
-    })
-  })
+  setTableColumnWidths(tr, tablePos, table, widths)
   return tr.docChanged ? tr : null
+}
+
+export const resizeTableColumnsFromPixels = (
+  state: EditorState, tablePos: number, table: ProseMirrorNode, widths: readonly number[],
+) => {
+  const previous = effectiveTableColumnWidths(table)
+  if (previous.length !== widths.length) return null
+  const centimeters = previous.map((width, index) => {
+    const pixels = widths[index]!
+    return pixels === centimetersToPixels(width) ? width : pixelsToCentimeters(pixels)
+  })
+  return resizeTableColumns(state, tablePos, table, centimeters)
+}
+
+export const distributeSelectedColumns: Command = (state, dispatch) => {
+  if (!(state.selection instanceof CellSelection)) return false
+
+  const { left, right, table, map, tableStart } = selectedRect(state)
+  if (right - left < 2) return false
+
+  const widths = effectiveTableColumnWidths(table)
+  if (widths.length !== map.width) return false
+  const selected = widths.slice(left, right)
+  if (!dispatch || selected.every(width => width === selected[0])) return true
+
+  const average = selected.reduce((sum, width) => sum + width, 0) / selected.length
+  widths.fill(average, left, right)
+  const transaction = resizeTableColumns(state, tableStart - 1, table, widths)
+  if (transaction) dispatch(transaction)
+  return true
 }

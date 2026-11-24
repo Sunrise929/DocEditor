@@ -1,4 +1,7 @@
-// The dialog uses hundredths of a centimeter to keep the width budget exact.
+import type { Node as ProseMirrorNode } from '@tiptap/pm/model'
+import type { Transaction } from '@tiptap/pm/state'
+import { TableMap } from '@tiptap/pm/tables'
+
 export type TableColumnLayout = {
   indentLeft: number
   widths: number[]
@@ -10,20 +13,32 @@ export type TableColumnSettings = {
   subjectIndex: number | null
 }
 
-export const MIN_SUBJECT_WIDTH = 20
-export const toColumnUnits = (cm: number) => Math.round(cm * 100)
-export const toCentimeters = (units: number) => units / 100
-export const toColumnPixels = (units: number) => Number((toCentimeters(units) * 96 / 2.54).toFixed(4))
+export const MIN_SUBJECT_WIDTH = 0.2
+export const COLUMN_WIDTH_TOLERANCE = 1e-9
+const pixelsPerCentimeter = 96 / 2.54
+export const centimetersToPixels = (cm: number) => cm * pixelsPerCentimeter
+export const pixelsToCentimeters = (px: number) => px / pixelsPerCentimeter
 
-export const widthUnitsFromFractions = (fractions: readonly number[], totalWidth: number) => {
-  let end = 0
-  let previous = 0
-  return fractions.map(fraction => {
-    end += fraction * totalWidth
-    const boundary = Math.round(end)
-    const width = boundary - previous
-    previous = boundary
-    return width
+export const setTableColumnWidths = (
+  tr: Transaction, tablePos: number, table: ProseMirrorNode, widths: readonly number[],
+) => {
+  const map = TableMap.get(table)
+  if (widths.length !== map.width) return
+
+  const firstColumns = new Map<number, number>()
+  map.map.forEach((offset, index) => {
+    if (!firstColumns.has(offset)) firstColumns.set(offset, index % map.width)
+  })
+  table.forEach((row, rowOffset) => {
+    row.forEach((cell, cellOffset) => {
+      const offset = rowOffset + 1 + cellOffset
+      const column = firstColumns.get(offset)
+      if (column === undefined) return
+      const colwidth = widths.slice(column, column + cell.attrs.colspan)
+      const previous = cell.attrs.colwidth as number[] | null
+      if (previous?.length === colwidth.length && colwidth.every((width, i) => width === previous[i])) return
+      tr.setNodeAttribute(tablePos + 1 + offset, 'colwidth', colwidth)
+    })
   })
 }
 
@@ -32,6 +47,8 @@ export const balanceColumnLayout = (
 ): TableColumnLayout => {
   const widths = [...layout.widths]
   const used = widths.reduce((total, width, index) => index === balanceIndex ? total : total + width, 0)
-  widths[balanceIndex] = availableWidth - layout.indentLeft - used
+  const remainder = availableWidth - layout.indentLeft - used
+  widths[balanceIndex] = Math.abs(remainder - MIN_SUBJECT_WIDTH) < COLUMN_WIDTH_TOLERANCE
+    ? MIN_SUBJECT_WIDTH : remainder
   return { ...layout, widths }
 }
