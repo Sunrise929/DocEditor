@@ -6,10 +6,29 @@ import 'element-plus/es/components/dialog/style/css'
 import 'element-plus/es/components/input-number/style/css'
 import 'element-plus/es/components/popover/style/css'
 import { reactive, ref, useId, watch } from 'vue'
+import type { TableBorderChange, TableBorders } from '../WordEditor/tableBorders'
+import WordTableBorderTools from './WordTableBorderTools.vue'
 import { isValidTableSize, MAX_TABLE_CELLS, type TableSize } from '../WordEditor/tableSize'
 
-const props = defineProps<{ disabled: boolean; header: boolean | null }>()
-const emit = defineEmits<{ insert: [size: TableSize]; toggleHeader: [] }>()
+const showTableGridlines = defineModel<boolean>('showTableGridlines', { default: true })
+const props = withDefaults(defineProps<{
+  disabled: boolean
+  insertOnly?: boolean
+  header?: boolean | null
+  numbered?: boolean | null
+  borders?: TableBorders | null
+}>(), {
+  header: null,
+  numbered: null,
+  borders: null,
+})
+const emit = defineEmits<{
+  insert: [size: TableSize]
+  toggleHeader: []
+  toggleNumbered: []
+  columnSettings: []
+  borderChange: [change: TableBorderChange]
+}>()
 const gridRows = 8
 const gridCols = 10
 const pickerId = useId()
@@ -139,7 +158,7 @@ const finishDialog = () => {
           >
             <span class="word-table-icon" aria-hidden="true" />
             <span class="word-page-setup-label">
-              表格
+              {{ insertOnly ? '插入表格' : '表格' }}
               <span class="word-style-chevron" aria-hidden="true" />
             </span>
           </ElButton>
@@ -174,17 +193,51 @@ const finishDialog = () => {
           </ElButton>
         </div>
       </ElPopover>
-      <ElButton
-        text
-        class="word-page-setup-button word-table-header-button"
-        :class="{ 'is-active': header }"
-        :disabled="header === null"
-        @mousedown.prevent
-        @click="emit('toggleHeader')"
-      >
-        <span class="word-table-icon word-table-header-icon" aria-hidden="true" />
-        <span>{{ header ? '取消表头' : '设置表头' }}</span>
-      </ElButton>
+      <template v-if="!insertOnly">
+        <ElButton
+          text
+          class="word-page-setup-button word-table-header-button"
+          :class="{ 'is-active': header }"
+          :disabled="header === null"
+          @mousedown.prevent
+          @click="emit('toggleHeader')"
+        >
+          <span class="word-table-icon word-table-header-icon" aria-hidden="true" />
+          <span>{{ header ? '取消表头' : '设置表头' }}</span>
+        </ElButton>
+        <ElButton
+          text
+          class="word-page-setup-button word-table-numbered-button"
+          :class="{ 'is-active': numbered }"
+          :disabled="numbered === null"
+          :aria-pressed="numbered === true"
+          @mousedown.prevent
+          @click="emit('toggleNumbered')"
+        >
+          <span class="word-table-icon word-numbered-table-icon" aria-hidden="true">
+            <span class="word-numbered-table-digits">
+              <span v-for="digit in 3" :key="digit">{{ digit }}</span>
+            </span>
+          </span>
+          <span>序号表</span>
+        </ElButton>
+        <ElButton
+          text
+          class="word-page-setup-button word-table-column-settings-button"
+          :disabled="header === null"
+          aria-haspopup="dialog"
+          @mousedown.prevent
+          @click="emit('columnSettings')"
+        >
+          <span class="word-table-column-settings-icon" aria-hidden="true">↔</span>
+          <span>列宽与缩进</span>
+        </ElButton>
+        <WordTableBorderTools
+          v-model:show-table-gridlines="showTableGridlines"
+          :borders="borders"
+          @change="emit('borderChange', $event)"
+        />
+      </template>
     </div>
     <span class="word-ribbon-group-title">表格</span>
 

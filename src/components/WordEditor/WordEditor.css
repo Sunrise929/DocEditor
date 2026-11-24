@@ -3,6 +3,7 @@
   --horizontal-ruler-height: 30px;
   --document-padding-block: 32px;
   --document-page-gap: 24px;
+  --word-table-gridline-color: #cbd0d8;
 
   position: relative;
   min-width: calc(var(--document-width) + 64px);
@@ -12,6 +13,10 @@
 
 .word-editor-canvas.is-ribbon-panel-pinned {
   --word-ribbon-bottom: 180px;
+}
+
+.word-editor-canvas.is-table-gridlines-hidden {
+  --word-table-gridline-color: transparent;
 }
 
 .document-workspace {
@@ -93,15 +98,33 @@
 }
 
 table[data-document-table] {
-  width: 100%;
-  table-layout: fixed;
+  --word-table-border-horizontal: 1px dotted var(--word-table-gridline-color, transparent);
+  --word-table-border-vertical: 1px dotted var(--word-table-gridline-color, transparent);
+
   border-collapse: collapse;
 }
 
 [data-document-table] :is(td, th) {
-  border: 1px solid #6b7280;
-  padding: 2px 5px;
-  vertical-align: top;
+  border-top: var(--word-table-border-horizontal);
+  border-bottom: var(--word-table-border-horizontal);
+  border-left: var(--word-table-border-vertical);
+  border-right: var(--word-table-border-vertical);
+}
+
+[data-document-table] [data-table-perimeter~="top"] {
+  border-top: var(--word-table-border-top);
+}
+
+[data-document-table] [data-table-perimeter~="bottom"] {
+  border-bottom: var(--word-table-border-bottom);
+}
+
+[data-document-table] [data-table-perimeter~="left"] {
+  border-left: var(--word-table-border-left);
+}
+
+[data-document-table] [data-table-perimeter~="right"] {
+  border-right: var(--word-table-border-right);
 }
 
 [data-document-table] :is(td, th).selectedCell {

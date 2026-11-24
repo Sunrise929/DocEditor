@@ -1,6 +1,9 @@
 import { Extension, getMarkRange, Mark } from '@tiptap/core'
-import type { Mark as ProseMirrorMark, MarkType, ResolvedPos } from '@tiptap/pm/model'
+import type { Mark as ProseMirrorMark, MarkType, Node as ProseMirrorNode, ResolvedPos } from '@tiptap/pm/model'
 import type { EditorState } from '@tiptap/pm/state'
+import { CellSelection } from '@tiptap/pm/tables'
+
+const fontSizeBlockTypes = ['paragraph', 'heading']
 
 export const parseFontSize = (value: unknown): number | null => {
   if (typeof value === 'string') {
@@ -48,14 +51,48 @@ export const InlineTextStyle = Mark.create({
 const cursorTextStyle = ($pos: ResolvedPos, type: MarkType) =>
   type.isInSet($pos.nodeBefore?.marks ?? [])
 
-export const readSelectionFontSize = (state: EditorState) => {
+const forEachSelectedCellBlock = (
+  selection: CellSelection,
+  visit: (block: ProseMirrorNode, position: number) => void,
+) => {
+  selection.forEachCell((cell, position) => {
+    cell.descendants((block, offset) => {
+      if (block.type.spec.tableRole === 'table') return false
+      if (!fontSizeBlockTypes.includes(block.type.name)) return
+      visit(block, position + 1 + offset)
+      return false
+    })
+  })
+}
+
+export const readSelectionFontSize = (state: EditorState): { size: number | null; available: boolean } => {
   const { selection, schema } = state
+  if (selection instanceof CellSelection) {
+    const sizes = new Set<number | null>()
+    forEachSelectedCellBlock(selection, block => sizes.add(parseFontSize(block.attrs.fontSize)))
+    return {
+      size: sizes.size === 1 ? sizes.values().next().value ?? null : null,
+      available: sizes.size > 0,
+    }
+  }
+  if (!fontSizeBlockTypes.includes(selection.$head.parent.type.name)) {
+    return { size: null, available: false }
+  }
   const type = schema.marks.textStyle
   const $pos = selection.$from
   const mark = type && (selection.empty
     ? cursorTextStyle($pos, type)
     : type.isInSet($pos.nodeAfter?.marks ?? []))
-  return parseFontSize(mark?.attrs.fontSize) ?? parseFontSize($pos.parent.attrs.fontSize)
+  const size = parseFontSize(mark?.attrs.fontSize) ?? parseFontSize($pos.parent.attrs.fontSize)
+  return { size, available: true }
+}
+
+export const setFontSizeInCells = (state: EditorState, selection: CellSelection, size: number) => {
+  const transaction = state.tr
+  forEachSelectedCellBlock(selection, (block, position) => {
+    if (block.attrs.fontSize !== size) transaction.setNodeAttribute(position, 'fontSize', size)
+  })
+  return transaction
 }
 
 const withoutFontSize = (mark: ProseMirrorMark) => {
@@ -97,7 +134,7 @@ export const BlockFontSize = Extension.create({
   name: 'blockFontSize',
   addGlobalAttributes() {
     return [{
-      types: ['paragraph', 'heading'],
+      types: fontSizeBlockTypes,
       attributes: {
         fontSize: {
           default: null,

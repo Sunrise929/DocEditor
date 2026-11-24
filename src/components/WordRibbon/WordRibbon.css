@@ -2,7 +2,6 @@
   position: sticky;
   z-index: 20;
   top: 42px;
-  min-width: 620px;
   color: #172033;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
@@ -101,6 +100,14 @@
   padding: 3px 14px 0;
 }
 
+.word-ribbon-panel .word-ribbon-panel-content.is-common {
+  overflow: auto hidden;
+}
+
+.word-ribbon-panel-content.is-common > .word-ribbon-group {
+  flex: none;
+}
+
 .word-ribbon-group {
   display: flex;
   min-width: 92px;
@@ -157,6 +164,26 @@
 
 .word-page-setup-button.el-button[aria-expanded="true"] {
   background: #e9f1fd;
+}
+
+.word-cell-edit-button.el-button {
+  min-width: 110px;
+}
+
+.word-cell-edit-icon {
+  width: 36px;
+  height: 30px;
+  border: 2px solid #394150;
+  border-radius: 2px;
+  background: linear-gradient(#394150, #394150) center / 1px 100% no-repeat, #eef2f8;
+}
+
+.word-cell-edit-button.is-merge .word-cell-edit-icon {
+  background: #e3edfa;
+}
+
+.word-cell-edit-button.is-disabled .word-cell-edit-icon {
+  opacity: 0.4;
 }
 
 .word-page-setup-label {

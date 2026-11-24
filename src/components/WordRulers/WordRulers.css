@@ -209,6 +209,10 @@
   transform: translateX(-50%);
 }
 
+.word-ruler-boundary.is-horizontal.is-start.has-table-indent {
+  width: 28px;
+}
+
 .word-ruler-boundary.is-horizontal::after {
   top: 0;
   bottom: 0;
@@ -451,4 +455,61 @@
   bottom: 1px;
   left: -3px;
   transform: rotate(135deg);
+}
+
+.word-table-column-handle,
+.word-table-indent-handle {
+  position: absolute;
+  z-index: 4;
+  top: 8px;
+  width: 14px;
+  height: 8px;
+  border: 0;
+  padding: 0;
+  transform: translateX(-50%);
+  background: transparent;
+  color: #515860;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+/* Keep the drag areas between the paragraph handles while drawing a full-height backing. */
+.word-table-indent-handle {
+  height: 4px;
+}
+
+:is(.word-table-column-handle, .word-table-indent-handle)::before,
+:is(.word-table-column-handle, .word-table-indent-handle)::after {
+  position: absolute;
+  pointer-events: none;
+  content: "";
+}
+
+:is(.word-table-column-handle, .word-table-indent-handle)::before {
+  inset: -8px 0 auto;
+  height: 24px;
+  background: #d3d6da;
+}
+
+:is(.word-table-column-handle, .word-table-indent-handle)::after {
+  --word-table-grid-line: 0.75px;
+  --word-table-grid-step: 1.85px;
+
+  inset: -1px 2px auto;
+  height: 10px;
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      currentColor 0 var(--word-table-grid-line),
+      transparent var(--word-table-grid-line) var(--word-table-grid-step)
+    ) center / 8.15px 10px no-repeat,
+    repeating-linear-gradient(
+      to right,
+      currentColor 0 var(--word-table-grid-line),
+      transparent var(--word-table-grid-line) var(--word-table-grid-step)
+    ) center / 6.3px 10px no-repeat;
+}
+
+:is(.word-table-column-handle, .word-table-indent-handle):is(:hover, :focus-visible) {
+  color: #303742;
 }

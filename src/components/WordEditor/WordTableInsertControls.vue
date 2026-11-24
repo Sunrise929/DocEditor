@@ -7,6 +7,7 @@ import { addColumn, addRow, TableMap } from '@tiptap/pm/tables'
 import { ElButton } from 'element-plus'
 import 'element-plus/es/components/button/style/css'
 import { onBeforeUnmount, onMounted, shallowRef } from 'vue'
+import { TABLE_EDGE_HIT_DISTANCE as hitDistance, visibleTableBounds } from './tableGeometry'
 import { isValidTableSize } from './tableSize'
 
 const props = defineProps<{ editor: Editor }>()
@@ -16,6 +17,7 @@ type InsertControl = {
   axis: Axis
   index: number
   coordinate: number
+  tableEdge: number
   start: number
   end: number
   tableElement: HTMLTableElement
@@ -24,7 +26,6 @@ type InsertControl = {
 }
 
 const axes = ['row', 'column'] as const
-const hitDistance = 5
 const keepDistance = 10
 const buttonRadius = 9
 const controls = shallowRef<InsertControl[]>([])
@@ -38,16 +39,9 @@ const clearControls = () => {
   if (controls.value.length) controls.value = []
 }
 
-const nearestInternalEdge = (
-  pointer: number,
-  start: number,
-  end: number,
-  firstIndex: number,
-  lastIndex: number,
-  count: number,
-) => {
-  const before = firstIndex > 0 ? Math.abs(pointer - start) : Infinity
-  const after = lastIndex < count ? Math.abs(pointer - end) : Infinity
+const nearestEdge = (pointer: number, start: number, end: number, firstIndex: number, lastIndex: number) => {
+  const before = Math.abs(pointer - start)
+  const after = Math.abs(pointer - end)
   if (Math.min(before, after) > hitDistance) return null
   return before <= after ? { index: firstIndex, coordinate: start } : { index: lastIndex, coordinate: end }
 }
@@ -57,49 +51,61 @@ const canInsertAt = (map: TableMap, axis: Axis) => isValidTableSize({
   cols: map.width + (axis === 'column' ? 1 : 0),
 })
 
-const controlsAtCell = (event: PointerEvent, cell: HTMLTableCellElement, tableElement: HTMLTableElement) => {
-  const box = cell.getBoundingClientRect()
+const cellProbeCoordinate = (pointer: number, start: number, end: number) => {
+  const inset = Math.min(2, (end - start) / 2)
+  return Math.max(start + inset, Math.min(end - inset, pointer))
+}
+
+const controlsAtTable = (event: PointerEvent, tableElement: HTMLTableElement): InsertControl[] => {
   const { clientX: x, clientY: y } = event
-  if (Math.min(Math.abs(y - box.top), Math.abs(y - box.bottom), Math.abs(x - box.left), Math.abs(x - box.right)) > hitDistance) {
-    return []
-  }
-
-  const { state, view } = props.editor
-  if (!view.dom.contains(cell)) return []
-  const position = state.doc.resolve(view.posAtDOM(cell, 0))
-  const table = findParentNodeClosestToPos(position, node => node.type.name === 'table')
-  const cellNode = findParentNodeClosestToPos(position, node =>
-    node.type.spec.tableRole === 'cell' || node.type.spec.tableRole === 'header_cell',
-  )
-  const wrapper = tableElement.parentElement
-  if (!table || !cellNode || !wrapper) return []
-
-  const map = TableMap.get(table.node)
-  const rect = map.findCell(cellNode.pos - table.start)
-  const frame = wrapper.getBoundingClientRect()
   const tableBox = tableElement.getBoundingClientRect()
-  const canvas = view.dom.closest('.word-editor-canvas')
-  const ribbonBottom = canvas ? parseFloat(getComputedStyle(canvas).getPropertyValue('--word-ribbon-bottom')) || 0 : 0
-  const horizontalRuler = canvas?.querySelector<HTMLElement>('.word-horizontal-ruler-shell')
-  const floatingRibbon = canvas?.parentElement?.querySelector('.word-ribbon-panel.is-floating')
-  const viewportTop = Math.max(ribbonBottom + (horizontalRuler?.offsetHeight ?? 0), floatingRibbon?.getBoundingClientRect().bottom ?? 0)
-  const left = Math.max(frame.left, tableBox.left, 0)
-  const right = Math.min(frame.left + wrapper.clientWidth, tableBox.right, document.documentElement.clientWidth)
-  const top = Math.max(frame.top, tableBox.top, viewportTop)
-  const bottom = Math.min(frame.top + wrapper.clientHeight, tableBox.bottom, document.documentElement.clientHeight)
-  if (left >= right || top >= bottom) return []
+  const nearLeft = Math.abs(x - tableBox.left) <= hitDistance
+    && y >= tableBox.top - hitDistance && y <= tableBox.bottom + hitDistance
+  const nearTop = Math.abs(y - tableBox.top) <= hitDistance
+    && x >= tableBox.left - hitDistance && x <= tableBox.right + hitDistance
+  if (!nearLeft && !nearTop) return []
+
+  const bounds = visibleTableBounds(tableElement, tableBox)
+  if (!bounds) return []
+  const { left, right, top, bottom, viewportTop } = bounds
+  const { state, view } = props.editor
 
   return axes.flatMap(axis => {
     const row = axis === 'row'
-    const edge = row
-      ? nearestInternalEdge(y, box.top, box.bottom, rect.top, rect.bottom, map.height)
-      : nearestInternalEdge(x, box.left, box.right, rect.left, rect.right, map.width)
-    if (!edge || !canInsertAt(map, axis)) return []
-    if (edge.coordinate < (row ? top : left) || edge.coordinate > (row ? bottom : right)) return []
+    if (row ? !nearLeft || tableBox.left < left : !nearTop || tableBox.top < top) return []
+
+    // Probe just inside the edge so the table border and the space beside it work too.
+    const probeX = cellProbeCoordinate(row ? left : x, left, right)
+    const probeY = cellProbeCoordinate(row ? y : top, top, bottom)
+    const cell = document.elementsFromPoint(probeX, probeY)
+      .map(element => element.closest<HTMLTableCellElement>('td, th'))
+      .find(candidate => candidate?.closest('table') === tableElement)
+    if (!cell) return []
+
+    const position = state.doc.resolve(view.posAtDOM(cell, 0))
+    const table = findParentNodeClosestToPos(position, node => node.type.name === 'table')
+    const cellNode = findParentNodeClosestToPos(position, node =>
+      node.type.spec.tableRole === 'cell' || node.type.spec.tableRole === 'header_cell',
+    )
+    if (!table || !cellNode) return []
+
+    const map = TableMap.get(table.node)
+    if (!canInsertAt(map, axis)) return []
+    const rect = map.findCell(cellNode.pos - table.start)
+    const box = cell.getBoundingClientRect()
+    const firstIndex = row ? rect.top : rect.left
+    const lastIndex = row ? rect.bottom : rect.right
+    const start = firstIndex === 0 ? (row ? tableBox.top : tableBox.left) : (row ? box.top : box.left)
+    const end = lastIndex === (row ? map.height : map.width)
+      ? (row ? tableBox.bottom : tableBox.right)
+      : (row ? box.bottom : box.right)
+    const edge = nearestEdge(row ? y : x, start, end, firstIndex, lastIndex)
+    if (!edge || edge.coordinate < (row ? top : left) || edge.coordinate > (row ? bottom : right)) return []
 
     return [{
       ...edge,
       axis,
+      tableEdge: row ? tableBox.left : tableBox.top,
       start: Math.max((row ? 0 : viewportTop) + buttonRadius + 2, (row ? left : top) - buttonRadius - 3),
       end: row ? right : bottom,
       tablePos: table.pos,
@@ -114,7 +120,7 @@ const isNearControl = (event: PointerEvent, control: InsertControl) => {
   const along = row ? event.clientX : event.clientY
   const across = row ? event.clientY : event.clientX
   return Math.abs(across - control.coordinate) <= keepDistance
-    && along >= control.start - buttonRadius - 2 && along <= control.end + 2
+    && along >= control.start - buttonRadius - 2 && along <= control.tableEdge + hitDistance
 }
 
 const updateControls = () => {
@@ -130,13 +136,17 @@ const updateControls = () => {
     return
   }
 
-  const cell = target?.closest<HTMLTableCellElement>('td, th')
-  const table = cell?.closest<HTMLTableElement>('table[data-document-table]')
-  const found = cell && table ? controlsAtCell(event, cell, table) : []
+  const { dom } = props.editor.view
+  const tableSelector = 'table[data-document-table]'
+  const page = target?.closest('[data-page]')
+  const hoveredTable = target?.closest<HTMLTableElement>(tableSelector)
+  const tables = hoveredTable && dom.contains(hoveredTable) ? [hoveredTable]
+    : page && dom.contains(page) ? Array.from(page.querySelectorAll<HTMLTableElement>(tableSelector)) : []
+  const found = tables.flatMap(table => controlsAtTable(event, table))
   const next = axes.flatMap(axis => {
     const control = found.find(hint => hint.axis === axis) ?? controls.value.find(hint =>
       hint.axis === axis && hint.tableElement.isConnected
-      && (!table || table === hint.tableElement) && isNearControl(event, hint),
+      && (!hoveredTable || hoveredTable === hint.tableElement) && isNearControl(event, hint),
     )
     return control ? [control] : []
   })
@@ -145,13 +155,13 @@ const updateControls = () => {
     const previous = controls.value[index]
     return previous?.axis === control.axis && previous.tableNode === control.tableNode
       && previous.index === control.index && previous.coordinate === control.coordinate
-      && previous.start === control.start && previous.end === control.end
+      && previous.start === control.start && previous.end === control.end && previous.tableEdge === control.tableEdge
   })) return
   controls.value = next
 }
 
 const onPointerMove = (event: PointerEvent) => {
-  if (!controls.value.length && !(event.target instanceof Element && event.target.closest('td, th'))) return
+  if (!controls.value.length && !(event.target instanceof Element && event.target.closest('[data-page]'))) return
   pendingPointer = event
   if (animationFrame === undefined) animationFrame = requestAnimationFrame(updateControls)
 }

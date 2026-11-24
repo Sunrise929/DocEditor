@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, shallowReactive, shallowRef } from 'vue'
 import { MIN_CONTENT_HEIGHT_MM, MIN_CONTENT_WIDTH_MM, type PageMargins } from '../WordEditor/pageGeometry'
-import { adjustIndent, type IndentHandle, type ParagraphIndent } from './paragraphIndent'
+import { resizeAdjacentColumns, type TableRulerContext } from '../WordEditor/tableRuler'
+import { adjustCellIndent, adjustIndent, type IndentHandle, type ParagraphIndent } from './paragraphIndent'
 
 defineOptions({ name: 'WordRulers' })
 
@@ -14,11 +15,15 @@ const props = defineProps<{
   pageOffset: number
   margins: PageMargins
   paragraphIndent: ParagraphIndent | null
+  tableRuler: TableRulerContext | null
+  columnResizePreview: { index: number; offset: number } | null
 }>()
 
 const emit = defineEmits<{
   marginChange: [key: MarginKey, value: number]
   indentChange: [handle: IndentHandle, delta: number]
+  columnResize: [table: TableRulerContext['table'], widths: number[]]
+  tableIndentChange: [table: TableRulerContext['table'], indent: number]
 }>()
 
 const rulerTicks = (length: number, includeNegative = false) => {
@@ -40,12 +45,22 @@ const indentHandles = [
   { key: 'left', label: '左缩进' },
   { key: 'right', label: '右缩进' },
 ] as const
-const indentWidth = computed(() => (props.pageWidth - props.margins.marginLeft - props.margins.marginRight) / 10)
+const indentBounds = computed(() => {
+  const cell = tableGeometry.value?.cell
+  return cell ? { start: tableIndentPreview(cell.start), end: tableIndentPreview(cell.end) }
+    : { start: props.margins.marginLeft, end: props.pageWidth - props.margins.marginRight }
+})
+const indentWidth = computed(() => (indentBounds.value.end - indentBounds.value.start) / 10)
 const indentDrag = ref<{ handle: IndentHandle; pointerId: number; startX: number; delta: number; precise: boolean; handleBottomOffset: number } | null>(null)
 const indentGuideHeight = ref(0)
 let replayDrag: ((precise: boolean) => void) | undefined
 
 const changePrecision = (event: KeyboardEvent) => {
+  if (event.key === 'Escape' && tableDrag.value) {
+    event.preventDefault()
+    stopTableDrag()
+    return
+  }
   if (event.key !== 'Alt' || !replayDrag) return
   event.preventDefault()
   if (!event.repeat) replayDrag(event.type === 'keydown')
@@ -65,6 +80,7 @@ const shownIndent = computed(() => {
   const indent = props.paragraphIndent
   const drag = indentDrag.value
   if (!indent || !drag) return indent
+  if (props.tableRuler?.cell) return adjustCellIndent(indent, drag.handle, drag.delta, indentWidth.value)
   return adjustIndent(
     indent, drag.handle, drag.delta, indentWidth.value,
     props.margins.marginLeft / 10, props.margins.marginRight / 10,
@@ -76,7 +92,7 @@ const indentCoordinate = (handle: IndentHandle) => {
   if (!indent) return 0
   const offset = handle === 'right' ? indentWidth.value - indent.indentRight
     : indent.indentLeft + (handle === 'first' ? indent.firstLineOffset : 0)
-  return props.margins.marginLeft + offset * 10
+  return indentBounds.value.start + offset * 10
 }
 
 const indentPosition = (handle: IndentHandle) =>
@@ -84,7 +100,7 @@ const indentPosition = (handle: IndentHandle) =>
 
 const startIndentDrag = (handle: IndentHandle, event: PointerEvent) => {
   const ruler = horizontalRuler.value
-  if (event.button !== 0 || indentDrag.value || marginGuide.value || !ruler) return
+  if (event.button !== 0 || indentDrag.value || tableDrag.value || marginGuide.value || !ruler) return
   event.preventDefault()
   const button = event.currentTarget as HTMLElement
   ruler.setPointerCapture(event.pointerId)
@@ -128,6 +144,152 @@ const cancelIndentDrag = (event: PointerEvent) => {
   if (indentDrag.value?.pointerId === event.pointerId) stopIndentDrag()
 }
 
+type TableDrag = {
+  context: TableRulerContext
+  index: number
+  pointerId: number
+  startX: number
+  widths: number[]
+  indentLeft: number
+  guideHeight: number
+  precise: boolean
+}
+const tableDrag = shallowRef<TableDrag | null>(null)
+const tableGeometry = computed(() => tableDrag.value?.context ?? props.tableRuler)
+
+const tableIndentLimit = computed(() => {
+  const contentWidth = props.pageWidth - props.margins.marginLeft - props.margins.marginRight
+  return Math.max(0, Math.floor((contentWidth - MIN_CONTENT_WIDTH_MM) * 10 + 1e-9) / 100)
+})
+
+const adjustedTableIndent = (context: TableRulerContext, deltaCm: number, precise: boolean) => {
+  const step = precise ? 0.01 : 0.25
+  const adjustment = Math.round(deltaCm / step) * step
+  if (!adjustment) return context.indentLeft
+  const next = Number((context.indentLeft + adjustment).toFixed(2))
+  const maxIndent = Math.max(context.indentLeft, tableIndentLimit.value)
+  return Math.max(0, Math.min(maxIndent, next))
+}
+
+const tableIndentPreview = (coordinate: number) => {
+  const drag = tableDrag.value
+  if (drag?.index !== 0) return coordinate
+  const { edges, indentLeft } = drag.context
+  const right = edges.at(-1)!
+  const width = right - edges[0]!
+  return width > 0 ? coordinate + (right - coordinate) / width * (drag.indentLeft - indentLeft) * 10 : coordinate
+}
+
+const tableEdge = (index: number) => {
+  const context = tableGeometry.value!
+  const drag = tableDrag.value
+  const edge = context.edges[index]!
+  if (drag?.index === 0) return tableIndentPreview(edge)
+  if (drag?.index === index) {
+    const change = drag.widths[index - 1]! - context.widths[index - 1]!
+    return edge + change / context.pixelsPerMm
+  }
+  const preview = props.columnResizePreview
+  return preview?.index === index ? edge + preview.offset / context.pixelsPerMm : edge
+}
+
+const tableGuideIndex = computed(() => tableDrag.value?.index ?? props.columnResizePreview?.index)
+const tableGuideHeight = computed(() => {
+  if (tableDrag.value) return tableDrag.value.guideHeight
+  if (tableGuideIndex.value === undefined || !horizontalRuler.value) return 0
+  return Math.max(0, document.documentElement.clientHeight - horizontalRuler.value.getBoundingClientRect().bottom)
+})
+
+const columnHandles = computed(() => (tableGeometry.value?.visibleEdges ?? []).flatMap(index => {
+  const edge = tableEdge(index)
+  return edge >= 0 && edge <= props.pageWidth ? [{ index, edge }] : []
+}))
+
+const tableIndentHandle = computed(() => {
+  const context = tableGeometry.value
+  if (!context) return null
+  const edge = tableEdge(0)
+  return edge >= 0 && edge <= props.pageWidth ? edge : null
+})
+
+const startTableDrag = (index: number, event: PointerEvent) => {
+  const context = props.tableRuler
+  const ruler = horizontalRuler.value
+  if (event.button !== 0 || !context || !ruler || tableDrag.value || indentDrag.value || marginGuide.value) return
+  event.preventDefault()
+  ruler.setPointerCapture(event.pointerId)
+  tableDrag.value = shallowReactive({
+    context, index, pointerId: event.pointerId, startX: event.clientX,
+    widths: context.widths,
+    indentLeft: context.indentLeft,
+    guideHeight: Math.max(0, document.documentElement.clientHeight - ruler.getBoundingClientRect().bottom),
+    precise: event.altKey,
+  })
+  listenForPrecision()
+  window.addEventListener('blur', stopTableDrag)
+  moveTableDrag(event)
+}
+
+const moveTableDrag = (event: PointerEvent, precise = event.altKey) => {
+  const drag = tableDrag.value
+  if (!drag || drag.pointerId !== event.pointerId) return
+  replayDrag = next => moveTableDrag(event, next)
+  drag.precise = precise
+  const distance = event.clientX - drag.startX
+  if (drag.index === 0) {
+    drag.indentLeft = adjustedTableIndent(drag.context, distance / (drag.context.pixelsPerMm * 10), precise)
+  } else {
+    const step = precise ? 1 : drag.context.pixelsPerMm * 2.5
+    drag.widths = resizeAdjacentColumns(drag.context.widths, drag.index, Math.round(distance / step) * step)
+  }
+}
+
+const commitColumns = (context: TableRulerContext, widths: number[]) => {
+  if (widths.some((width, index) => width !== context.widths[index])) emit('columnResize', context.table, widths)
+}
+
+const stopTableDrag = () => {
+  tableDrag.value = null
+  stopPrecision()
+  window.removeEventListener('blur', stopTableDrag)
+}
+
+const moveHorizontalDrag = (event: PointerEvent) => {
+  if (tableDrag.value) moveTableDrag(event)
+  else moveIndentDrag(event)
+}
+
+const finishHorizontalDrag = (event: PointerEvent) => {
+  const drag = tableDrag.value
+  if (!drag) return finishIndentDrag(event)
+  if (drag.pointerId !== event.pointerId) return
+  moveTableDrag(event)
+  stopTableDrag()
+  if (drag.index === 0) {
+    if (drag.indentLeft !== drag.context.indentLeft) emit('tableIndentChange', drag.context.table, drag.indentLeft)
+  } else {
+    commitColumns(drag.context, drag.widths)
+  }
+}
+
+const cancelHorizontalDrag = (event: PointerEvent) => {
+  if (tableDrag.value?.pointerId === event.pointerId) stopTableDrag()
+  else cancelIndentDrag(event)
+}
+
+const moveTableHandleWithKey = (index: number, direction: number, event: KeyboardEvent) => {
+  const context = props.tableRuler
+  if (!context || tableDrag.value || indentDrag.value || marginGuide.value) return
+  if (index === 0) {
+    const step = event.altKey ? 0.01 : 0.25
+    const indent = adjustedTableIndent(context, direction * step, event.altKey)
+    if (indent !== context.indentLeft) emit('tableIndentChange', context.table, indent)
+  } else {
+    const step = event.altKey ? 1 : context.pixelsPerMm * 2.5
+    commitColumns(context, resizeAdjacentColumns(context.widths, index, direction * step))
+  }
+}
+
 const verticalRulerPosition = computed(() => ({
   top: `calc(var(--horizontal-ruler-height) + var(--document-padding-block) + ${props.pageOffset}px)`,
 }))
@@ -159,7 +321,7 @@ const verticalContentPercentage = (tick: number) => {
 let removeMarginDragListeners: (() => void) | null = null
 const marginGuide = ref<{ key: MarginKey; horizontal: boolean; length: number; precise: boolean } | null>(null)
 const horizontalPrecision = computed(() =>
-  Boolean(indentDrag.value?.precise || (marginGuide.value?.precise && marginGuide.value.horizontal)),
+  Boolean(tableDrag.value?.precise || indentDrag.value?.precise || (marginGuide.value?.precise && marginGuide.value.horizontal)),
 )
 const verticalPrecision = computed(() => Boolean(marginGuide.value?.precise && !marginGuide.value.horizontal))
 
@@ -168,8 +330,16 @@ const precisionSegments = (horizontal: boolean) => {
   const { marginLeft, marginRight, marginTop, marginBottom } = props.margins
   const start = horizontal ? marginLeft : marginTop
   const end = total - (horizontal ? marginRight : marginBottom)
-  const marks = [0, total, start, end]
-  if (horizontal && shownIndent.value) {
+  const marks = horizontal && tableDrag.value
+    ? [
+        ...(tableDrag.value.index === 0 ? [start] : []),
+        tableEdge(0),
+        ...columnHandles.value.map(handle => handle.edge),
+        tableEdge(tableDrag.value.widths.length),
+      ]
+    : [0, total, start, end]
+  if (horizontal && !tableDrag.value && shownIndent.value) {
+    marks.push(indentBounds.value.start, indentBounds.value.end)
     marks.push(...indentHandles.map(handle => indentCoordinate(handle.key)))
   }
   const sortedMarks = marks
@@ -203,7 +373,7 @@ const stopMarginDrag = () => {
 }
 
 const startMarginDrag = (key: MarginKey, event: PointerEvent) => {
-  if (event.button !== 0 || indentDrag.value) return
+  if (event.button !== 0 || indentDrag.value || tableDrag.value) return
   event.preventDefault()
   stopMarginDrag()
 
@@ -211,12 +381,17 @@ const startMarginDrag = (key: MarginKey, event: PointerEvent) => {
   const ruler = horizontal ? horizontalRuler.value : verticalRuler.value
   if (!ruler) return
 
+  const rulerRect = ruler.getBoundingClientRect()
+  const leftMarginGrabOffset = key === 'marginLeft' && tableIndentHandle.value !== null
+    ? event.clientX - rulerRect.left - rulerRect.width * props.margins.marginLeft / props.pageWidth
+    : 0
+
   const move = (pointerEvent: PointerEvent, precise = pointerEvent.altKey) => {
     if (pointerEvent.pointerId !== event.pointerId) return
     const rect = ruler.getBoundingClientRect()
     const pageSize = horizontal ? props.pageWidth : props.pageHeight
     const pointerPosition = horizontal
-      ? pointerEvent.clientX - rect.left
+      ? pointerEvent.clientX - rect.left - leftMarginGrabOffset
       : pointerEvent.clientY - rect.top
     const rulerSize = horizontal ? rect.width : rect.height
     if (!rulerSize) return
@@ -280,6 +455,7 @@ const startMarginDrag = (key: MarginKey, event: PointerEvent) => {
 onBeforeUnmount(() => {
   stopMarginDrag()
   stopIndentDrag()
+  stopTableDrag()
 })
 </script>
 
@@ -290,10 +466,10 @@ onBeforeUnmount(() => {
       ref="horizontalRuler"
       class="word-ruler word-horizontal-ruler"
       :class="{ 'is-precision': horizontalPrecision }"
-      @pointermove="moveIndentDrag"
-      @pointerup="finishIndentDrag"
-      @pointercancel="cancelIndentDrag"
-      @lostpointercapture="cancelIndentDrag"
+      @pointermove="moveHorizontalDrag"
+      @pointerup="finishHorizontalDrag"
+      @pointercancel="cancelHorizontalDrag"
+      @lostpointercapture="cancelHorizontalDrag"
     >
       <span
         class="word-ruler-margin-shade is-start"
@@ -347,6 +523,7 @@ onBeforeUnmount(() => {
       <button
         type="button"
         class="word-ruler-boundary is-horizontal is-start"
+        :class="{ 'has-table-indent': tableIndentHandle !== null }"
         :style="{ left: percentage(margins.marginLeft, pageWidth) }"
         :aria-label="`调整第 ${currentPageNumber} 页左边距`"
         title="拖动调整左边距"
@@ -377,6 +554,38 @@ onBeforeUnmount(() => {
           <span class="word-measure-arrow is-end" aria-hidden="true" />
         </span>
       </template>
+      <button
+        v-if="tableIndentHandle !== null"
+        type="button"
+        class="word-table-indent-handle"
+        :style="{ left: percentage(tableIndentHandle, pageWidth) }"
+        aria-label="调整表格左缩进"
+        :title="`表格左缩进 ${tableDrag?.indentLeft ?? tableRuler?.indentLeft} cm，Alt 精细调整`"
+        @pointerdown="startTableDrag(0, $event)"
+        @keydown.left.prevent="moveTableHandleWithKey(0, -1, $event)"
+        @keydown.right.prevent="moveTableHandleWithKey(0, 1, $event)"
+      />
+      <button
+        v-for="{ index, edge } in columnHandles"
+        :key="index"
+        type="button"
+        class="word-table-column-handle"
+        :style="{ left: percentage(edge, pageWidth) }"
+        :aria-label="`调整第 ${index} 列列宽`"
+        title="拖动调整相邻列宽，Alt 精细调整"
+        @pointerdown="startTableDrag(index, $event)"
+        @keydown.left.prevent="moveTableHandleWithKey(index, -1, $event)"
+        @keydown.right.prevent="moveTableHandleWithKey(index, 1, $event)"
+      />
+      <span
+        v-if="tableGuideIndex !== undefined"
+        class="word-margin-guide is-down word-table-column-guide"
+        :style="{
+          left: percentage(tableEdge(tableGuideIndex), pageWidth),
+          height: `${tableGuideHeight}px`,
+        }"
+        aria-hidden="true"
+      />
       <template v-if="shownIndent">
         <button
           v-for="handle in indentHandles"

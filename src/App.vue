@@ -6,9 +6,11 @@ import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import WordEditor from './components/WordEditor/WordEditor.vue'
 import WordRibbon from './components/WordRibbon/WordRibbon.vue'
 import WordTitleBar from './components/WordTitleBar/WordTitleBar.vue'
+import type { TableCellAction, TableCellAlignment, TableCellAlignmentState } from './components/WordEditor/documentTable'
 import type { DocumentBlockStyle } from './components/WordEditor/documentHeading'
 import type { InlineFormat, InlineFormatState } from './components/WordEditor/inlineFormatting'
 import { DEFAULT_PAGE_MARGINS, type PageMargins, type PageOrientation } from './components/WordEditor/pageGeometry'
+import type { TableBorderChange, TableBorders } from './components/WordEditor/tableBorders'
 import type { TableSize } from './components/WordEditor/tableSize'
 
 type WordEditorApi = {
@@ -22,16 +24,26 @@ type WordEditorApi = {
   setCurrentPageMargins: (margins: PageMargins) => void
   insertTable: (size: TableSize) => void
   toggleTableHeader: () => void
+  toggleTableNumbered: () => void
+  showTableColumnSettings: () => void
+  editTableCells: (action: TableCellAction) => void
+  alignTableCells: (alignment: TableCellAlignment) => void
+  setTableBorders: (change: TableBorderChange) => void
 }
 
 const wordEditor = ref<WordEditorApi | null>(null)
 const showRulers = ref(true)
+const showTableGridlines = ref(true)
 const ribbonPanelPinned = ref(true)
 const blockStyle = ref<DocumentBlockStyle | null>(1)
 const blockFontSize = ref<number | null>(null)
 const canSetFontSize = ref(true)
 const canInsertTable = ref(true)
 const tableHeader = ref<boolean | null>(null)
+const tableNumbered = ref<boolean | null>(null)
+const tableBorders = ref<TableBorders | null>(null)
+const tableCellAction = ref<TableCellAction | null>(null)
+const tableCellAlignment = ref<TableCellAlignmentState>({ available: false, alignment: null })
 const inlineFormats = reactive<InlineFormatState>({ bold: false, italic: false, underline: false })
 const pageOrientation = ref<PageOrientation>('portrait')
 const pageMargins = ref<PageMargins>({ ...DEFAULT_PAGE_MARGINS })
@@ -57,12 +69,17 @@ const saveDocument = () => {
       />
       <WordRibbon
         v-model:show-rulers="showRulers"
+        v-model:show-table-gridlines="showTableGridlines"
         v-model:panel-pinned="ribbonPanelPinned"
         :block-style="blockStyle"
         :font-size="blockFontSize"
         :can-set-font-size="canSetFontSize"
         :can-insert-table="canInsertTable"
         :table-header="tableHeader"
+        :table-numbered="tableNumbered"
+        :table-borders="tableBorders"
+        :table-cell-action="tableCellAction"
+        :table-cell-alignment="tableCellAlignment"
         :inline-formats="inlineFormats"
         :page-orientation="pageOrientation"
         :page-margins="pageMargins"
@@ -73,10 +90,16 @@ const saveDocument = () => {
         @page-margins-select="wordEditor?.setCurrentPageMargins($event)"
         @table-insert="wordEditor?.insertTable($event)"
         @table-header-toggle="wordEditor?.toggleTableHeader()"
+        @table-numbered-toggle="wordEditor?.toggleTableNumbered()"
+        @table-column-settings="wordEditor?.showTableColumnSettings()"
+        @table-border-change="wordEditor?.setTableBorders($event)"
+        @table-cell-edit="wordEditor?.editTableCells($event)"
+        @table-cell-align="wordEditor?.alignTableCells($event)"
       />
       <WordEditor
         ref="wordEditor"
         :show-rulers="showRulers"
+        :show-table-gridlines="showTableGridlines"
         :ribbon-panel-pinned="ribbonPanelPinned"
         @block-style-change="blockStyle = $event"
         @block-font-size-change="syncFontSize"
@@ -85,6 +108,10 @@ const saveDocument = () => {
         @page-margins-change="pageMargins = $event"
         @table-insertion-availability-change="canInsertTable = $event"
         @table-header-change="tableHeader = $event"
+        @table-numbered-change="tableNumbered = $event"
+        @table-borders-change="tableBorders = $event"
+        @table-cell-action-change="tableCellAction = $event"
+        @table-cell-alignment-change="tableCellAlignment = $event"
       />
     </div>
   </ElConfigProvider>

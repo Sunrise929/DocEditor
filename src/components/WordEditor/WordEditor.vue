@@ -6,21 +6,38 @@ import StarterKit from '@tiptap/starter-kit'
 import { closeHistory } from '@tiptap/pm/history'
 import { Fragment, Slice, type Node as ProseMirrorNode } from '@tiptap/pm/model'
 import { Plugin, Selection, TextSelection, type Transaction } from '@tiptap/pm/state'
+import { CellSelection } from '@tiptap/pm/tables'
 import { canJoin } from '@tiptap/pm/transform'
 import { EditorContent, useEditor } from '@tiptap/vue-3'
-import { ref } from 'vue'
+import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import WordRulers from '../WordRulers/WordRulers.vue'
 import WordTableInsertControls from './WordTableInsertControls.vue'
-import { BlockFontSize, InlineTextStyle, parseFontSize, readSelectionFontSize, setFontSizeAtCursor } from './blockFontSize'
+import WordTableResizeControls from './WordTableResizeControls.vue'
+import TableColumnSettingsDialog from './TableColumnSettingsDialog.vue'
+import {
+  BlockFontSize, InlineTextStyle, parseFontSize, readSelectionFontSize, setFontSizeAtCursor, setFontSizeInCells,
+} from './blockFontSize'
 import { blockStyleOptions, DocumentHeading, isHeadingLevel, type DocumentBlockStyle } from './documentHeading'
-import { hasHeaderRow, PreventNestedTables, tableAtSelection, toggleFirstRowHeader } from './documentTable'
+import {
+  DocumentTable, DocumentTableCell, DocumentTableHeader, hasHeaderRow, PreventNestedTables,
+  readTableIndent, tableAtSelection, tableCellCommands, tableColumnFractions, toggleFirstRowHeader,
+  type TableCellAction, type TableCellAlignment, type TableCellAlignmentState,
+} from './documentTable'
 import { inlineFormatCommands, type InlineFormat, type InlineFormatState } from './inlineFormatting'
+import {
+  cellAtPosition, cellTextBox, readTableRuler, resizeTableColumns, type ColumnResizeTarget, type TableRulerContext,
+} from './tableRuler'
+import { changeTableBorders, readTableBorders, type TableBorderChange, type TableBorders } from './tableBorders'
+import {
+  toCentimeters, toColumnPixels, toColumnUnits, widthUnitsFromFractions,
+  type TableColumnLayout, type TableColumnSettings,
+} from './tableColumnLayout'
 import { isValidTableSize, type TableSize } from './tableSize'
 import {
   DEFAULT_PAGE_MARGINS, fitPageMargins, pageDimensions, readPageOrientation,
   samePageMargins, validPageMargins, type PageMargins, type PageOrientation,
 } from './pageGeometry'
-import { adjustIndent, indentDefaults, type IndentHandle, type ParagraphIndent } from '../WordRulers/paragraphIndent'
+import { adjustCellIndent, adjustIndent, indentDefaults, type IndentHandle, type ParagraphIndent } from '../WordRulers/paragraphIndent'
 
 defineOptions({ name: 'WordEditor' })
 
@@ -32,13 +49,19 @@ const emit = defineEmits<{
   pageMarginsChange: [margins: PageMargins]
   tableInsertionAvailabilityChange: [available: boolean]
   tableHeaderChange: [header: boolean | null]
+  tableNumberedChange: [numbered: boolean | null]
+  tableBordersChange: [borders: TableBorders | null]
+  tableCellActionChange: [action: TableCellAction | null]
+  tableCellAlignmentChange: [state: TableCellAlignmentState]
 }>()
 
-withDefaults(defineProps<{
+const props = withDefaults(defineProps<{
   showRulers?: boolean
+  showTableGridlines?: boolean
   ribbonPanelPinned?: boolean
 }>(), {
   showRulers: true,
+  showTableGridlines: true,
   ribbonPanelPinned: true,
 })
 
@@ -57,6 +80,30 @@ const documentWidth = ref(currentPageDimensions.value.width)
 let layoutDoc: ProseMirrorNode | undefined
 let pageOrientations: PageOrientation[] = []
 const paragraphIndent = ref<ParagraphIndent | null>(null)
+const tableColumnDialog = ref<InstanceType<typeof TableColumnSettingsDialog> | null>(null)
+let tableColumnTarget: { position: number; node: ProseMirrorNode; settings: TableColumnSettings } | null = null
+const tableRuler = shallowRef<TableRulerContext | null>(null)
+type RulerPage = {
+  number: number
+  dimensions: ReturnType<typeof pageDimensions>
+  margins: PageMargins
+  offset: number
+}
+const columnResizeRuler = shallowRef<{ page: RulerPage; context: TableRulerContext; index: number } | null>(null)
+const columnResizeOffset = ref(0)
+const rulerPage = computed<RulerPage>(() => columnResizeRuler.value?.page ?? {
+  number: currentPageNumber.value,
+  dimensions: currentPageDimensions.value,
+  margins: currentPageMargins.value,
+  offset: currentPageOffset.value,
+})
+const rulerColumnPreview = computed(() => columnResizeRuler.value
+  ? { index: columnResizeRuler.value.index, offset: columnResizeOffset.value }
+  : null)
+let tableRulerFrame = 0
+let tableRulerObserver: ResizeObserver | undefined
+let observedTable: HTMLTableElement | undefined
+let tableScroller: HTMLElement | null | undefined
 const indentKeys = Object.keys(indentDefaults) as (keyof ParagraphIndent)[]
 const indentableBlockTypes = ['paragraph', 'heading']
 const isIndentableBlock = (node: ProseMirrorNode) =>
@@ -105,9 +152,8 @@ const syncBlockIndent = (instance: Editor) => {
 const syncBlockStyle = ({ state }: Editor) => {
   const { $head } = state.selection
   const { type, attrs } = $head.parent
-  const fontSizeAvailable = isIndentableBlock($head.parent)
-  const size = fontSizeAvailable ? readSelectionFontSize(state) : null
-  emit('blockFontSizeChange', size, fontSizeAvailable)
+  const { size, available } = readSelectionFontSize(state)
+  emit('blockFontSizeChange', size, available)
   const style = type.name === 'heading' && isHeadingLevel(attrs.level)
     ? attrs.level
     : type.name === 'paragraph' ? 'paragraph' : null
@@ -131,10 +177,75 @@ const syncInlineFormats = (instance: Editor) => {
   })
 }
 
+const observeRulerTable = (element?: HTMLTableElement) => {
+  if (element === observedTable) return
+  tableRulerObserver?.disconnect()
+  tableScroller?.removeEventListener('scroll', refreshTableRuler)
+  observedTable = element
+  tableScroller = element?.parentElement
+  tableScroller?.addEventListener('scroll', refreshTableRuler, { passive: true })
+  if (element) {
+    tableRulerObserver ??= new ResizeObserver(refreshTableRuler)
+    tableRulerObserver.observe(element)
+  }
+}
+
+const refreshTableRuler = () => {
+  const instance = editor.value
+  if (!props.showRulers || !instance || instance.isDestroyed || !tableAtSelection(instance.state.selection)) {
+    cancelAnimationFrame(tableRulerFrame)
+    tableRulerFrame = 0
+    tableRuler.value = null
+    observeRulerTable()
+    return
+  }
+  if (tableRulerFrame) return
+  tableRulerFrame = requestAnimationFrame(() => {
+    tableRulerFrame = 0
+    if (instance.isDestroyed) return
+    const next = readTableRuler(instance.view, currentPageDimensions.value.width)
+    observeRulerTable(next?.element)
+    tableRuler.value = next?.context ?? null
+  })
+}
+
+const forEachCellAtSelection = (selection: Selection, visit: (cell: ProseMirrorNode, position: number) => void) => {
+  if (selection instanceof CellSelection) {
+    selection.forEachCell(visit)
+    return
+  }
+
+  const cell = cellAtPosition(selection.$head)
+  if (cell) visit(cell.node, cell.pos)
+}
+
+const readTableCellAlignment = (selection: Selection): TableCellAlignmentState => {
+  const result: TableCellAlignmentState = { available: false, alignment: null }
+  forEachCellAtSelection(selection, cell => {
+    const { textAlign, verticalAlign } = cell.attrs
+    if (!result.available && textAlign && verticalAlign) {
+      result.alignment = { textAlign, verticalAlign }
+    }
+    if (result.alignment?.textAlign !== textAlign || result.alignment?.verticalAlign !== verticalAlign) {
+      result.alignment = null
+    }
+    result.available = true
+  })
+  return result
+}
+
 const syncTableTools = (instance: Editor) => {
-  const table = tableAtSelection(instance.state.selection)
+  const { state } = instance
+  const table = tableAtSelection(state.selection)
+  const mergeAvailable = table && tableCellCommands.merge(state)
+  const splitAvailable = table && !mergeAvailable && tableCellCommands.split(state)
+  emit('tableCellActionChange', mergeAvailable ? 'merge' : splitAvailable ? 'split' : null)
+  emit('tableCellAlignmentChange', readTableCellAlignment(state.selection))
   emit('tableInsertionAvailabilityChange', !table)
   emit('tableHeaderChange', table ? hasHeaderRow(table.node) : null)
+  emit('tableNumberedChange', table ? table.node.attrs.isNumbered === true : null)
+  emit('tableBordersChange', table ? readTableBorders(table.node.attrs.borders) : null)
+  refreshTableRuler()
 }
 
 const marginValue = (value: unknown, fallback: number) => {
@@ -171,6 +282,13 @@ const pageAtPosition = (
   return null
 }
 
+const readPageOffset = (instance: Editor, position: number) => {
+  const firstPage = instance.view.nodeDOM(0)
+  const page = instance.view.nodeDOM(position)
+  return firstPage instanceof HTMLElement && page instanceof HTMLElement
+    ? page.getBoundingClientRect().top - firstPage.getBoundingClientRect().top : null
+}
+
 const syncCurrentPage = (editorInstance: Editor) => {
   const { doc, selection } = editorInstance.state
   const page = pageAtPosition(doc, selection.head)
@@ -195,11 +313,7 @@ const syncCurrentPage = (editorInstance: Editor) => {
   const dimensions = pageDimensions(orientation)
   if (currentPageDimensions.value.width !== dimensions.width) currentPageDimensions.value = dimensions
   if (layoutChanged || currentPageNumber.value !== page.index + 1) {
-    const firstPage = editorInstance.view.nodeDOM(0)
-    const currentPage = editorInstance.view.nodeDOM(page.pos)
-    if (firstPage instanceof HTMLElement && currentPage instanceof HTMLElement) {
-      currentPageOffset.value = currentPage.getBoundingClientRect().top - firstPage.getBoundingClientRect().top
-    }
+    currentPageOffset.value = readPageOffset(editorInstance, page.pos) ?? currentPageOffset.value
   }
   currentPageNumber.value = page.index + 1
   const margins = pageMarginsFromNode(page.node)
@@ -773,9 +887,13 @@ const editor = useEditor({
   extensions: [
     StarterKit.configure({ document: false, heading: false, codeBlock: false }),
     TableKit.configure({
-      table: { cellMinWidth: 18, HTMLAttributes: { 'data-document-table': '' } },
-      tableHeader: { HTMLAttributes: { style: 'background-color: var(--table-cell-selection, #edf3fa)' } },
+      table: false,
+      tableCell: false,
+      tableHeader: false,
     }),
+    DocumentTable,
+    DocumentTableCell,
+    DocumentTableHeader,
     PreventNestedTables,
     DocumentCodeBlock,
     DocumentHeading,
@@ -791,11 +909,24 @@ const editor = useEditor({
     content: [
       {
         type: 'page',
-        content: blockStyleOptions.map(({ value, label }) => ({
-          type: value === 'paragraph' ? 'paragraph' : 'heading',
-          ...(value === 'paragraph' ? {} : { attrs: { level: value } }),
-          content: [{ type: 'text', text: label }],
-        })),
+        content: [
+          ...blockStyleOptions.map(({ value, label }) => ({
+            type: value === 'paragraph' ? 'paragraph' : 'heading',
+            ...(value === 'paragraph' ? {} : { attrs: { level: value } }),
+            content: [{ type: 'text', text: label }],
+          })),
+          {
+            type: 'table',
+            content: Array.from({ length: 10 }, () => ({
+              type: 'tableRow',
+              content: Array.from({ length: 10 }, () => ({
+                type: 'tableCell',
+                content: [{ type: 'paragraph' }],
+              })),
+            })),
+          },
+          { type: 'paragraph' },
+        ],
       },
     ],
   },
@@ -821,6 +952,61 @@ const editor = useEditor({
     syncTableTools(editorInstance)
   },
 })
+
+watch(() => props.showRulers, refreshTableRuler)
+onBeforeUnmount(() => {
+  cancelAnimationFrame(tableRulerFrame)
+  observeRulerTable()
+})
+
+const startColumnResizeRuler = (target: ColumnResizeTarget) => {
+  const instance = editor.value
+  if (!instance) return
+  const page = pageAtPosition(instance.state.doc, target.tablePos + 1)
+  if (!page) return
+
+  const dimensions = pageDimensions(readPageOrientation(page.node.attrs.orientation))
+  const preview = readTableRuler(instance.view, dimensions.width, target)
+  if (!preview) return
+
+  columnResizeOffset.value = 0
+  columnResizeRuler.value = {
+    page: {
+      number: page.index + 1,
+      dimensions,
+      margins: pageMarginsFromNode(page.node),
+      offset: readPageOffset(instance, page.pos) ?? 0,
+    },
+    context: preview.context,
+    index: target.index,
+  }
+}
+
+const updateColumnResizeRuler = (offset: number) => {
+  if (columnResizeRuler.value) columnResizeOffset.value = offset
+}
+
+const stopColumnResizeRuler = () => {
+  columnResizeRuler.value = null
+}
+
+const updateTableColumns = (table: TableRulerContext['table'], widths: number[]) => {
+  const instance = editor.value
+  if (!instance) return
+  const active = tableAtSelection(instance.state.selection)
+  if (!active || active.node !== table) return
+  const transaction = resizeTableColumns(instance.state, active.start - 1, table, widths)
+  if (transaction) instance.view.dispatch(closeHistory(transaction))
+}
+
+const updateTableIndent = (originalTable: TableRulerContext['table'], indent: number) => {
+  const instance = editor.value
+  if (!instance) return
+  const { state, view } = instance
+  const table = tableAtSelection(state.selection)
+  if (!table || table.node !== originalTable || readTableIndent(table.node.attrs.indentLeft) === indent) return
+  view.dispatch(closeHistory(state.tr.setNodeAttribute(table.start - 1, 'indentLeft', indent)))
+}
 
 const setBlockStyle = (style: DocumentBlockStyle) => {
   const instance = editor.value
@@ -852,17 +1038,18 @@ const setBlockFontSize = (size: number, focusEditor: boolean) => {
   const instance = editor.value
   if (!instance || parseFontSize(size) === null) return
   const { state, view } = instance
-  if (!state.selection.empty) {
+  const { selection } = state
+  if (selection instanceof CellSelection) {
+    const transaction = setFontSizeInCells(state, selection, size)
+    if (transaction.docChanged) view.dispatch(closeHistory(transaction))
+  } else if (!selection.empty) {
     instance.commands.setMark('textStyle', { fontSize: size })
-    if (focusEditor) view.focus()
+  } else if (isIndentableBlock(selection.$head.parent)) {
+    const transaction = setFontSizeAtCursor(state, size)
+    if (transaction.docChanged || transaction.storedMarksSet) view.dispatch(transaction)
+  } else {
     return
   }
-
-  const { $head } = state.selection
-  if (!isIndentableBlock($head.parent)) return
-
-  const transaction = setFontSizeAtCursor(state, size)
-  if (transaction.docChanged || transaction.storedMarksSet) view.dispatch(transaction)
   if (focusEditor) view.focus()
 }
 
@@ -870,6 +1057,8 @@ const updateBlockIndent = (handle: IndentHandle, delta: number) => {
   const instance = editor.value
   if (!instance || !delta) return
   const { doc, selection, tr } = instance.state
+  const { view } = instance
+  const cellWidths = new Map<number, number>()
   const update = (node: ProseMirrorNode, pos: number) => {
     if (!isIndentableBlock(node)) return
     const page = pageAtPosition(doc, pos + 1)
@@ -877,10 +1066,24 @@ const updateBlockIndent = (handle: IndentHandle, delta: number) => {
     const { marginLeft, marginRight } = pageMarginsFromNode(page.node)
     const { width } = pageDimensions(readPageOrientation(page.node.attrs.orientation))
     const before = readIndent(node)
-    const after = adjustIndent(
-      before, handle, delta, (width - marginLeft - marginRight) / 10,
-      marginLeft / 10, marginRight / 10,
-    )
+    const cell = cellAtPosition(doc.resolve(pos + 1))
+    let after: ParagraphIndent
+    if (cell) {
+      let cellWidth = cellWidths.get(cell.pos)
+      if (cellWidth === undefined) {
+        const box = cellTextBox(view, cell.pos)
+        const pageElement = view.nodeDOM(page.pos)
+        if (!box || !(pageElement instanceof HTMLElement)) return false
+        const pagePixels = pageElement.getBoundingClientRect().width
+        if (!pagePixels) return false
+        cellWidth = (box.end - box.start) / pagePixels * width / 10
+        if (!cellWidth) return false
+        cellWidths.set(cell.pos, cellWidth)
+      }
+      after = adjustCellIndent(before, handle, delta, cellWidth)
+    } else {
+      after = adjustIndent(before, handle, delta, (width - marginLeft - marginRight) / 10, marginLeft / 10, marginRight / 10)
+    }
     if (indentKeys.some(key => before[key] !== after[key])) {
       tr.setNodeMarkup(pos, undefined, { ...node.attrs, ...after })
     }
@@ -890,9 +1093,9 @@ const updateBlockIndent = (handle: IndentHandle, delta: number) => {
     const { $from } = selection
     if (isIndentableBlock($from.parent)) update($from.parent, $from.before())
   } else {
-    doc.nodesBetween(selection.from, selection.to, update)
+    for (const { $from, $to } of selection.ranges) doc.nodesBetween($from.pos, $to.pos, update)
   }
-  if (tr.docChanged) instance.view.dispatch(tr)
+  if (tr.docChanged) view.dispatch(tr)
 }
 
 const setCurrentPageMargins = (changes: Partial<PageMargins>, fromRuler = false) => {
@@ -960,6 +1163,48 @@ const insertTable = (size: TableSize) => {
   if (inserted) instance.view.focus()
 }
 
+const setTableBorders = (change: TableBorderChange) => {
+  const instance = editor.value
+  if (!instance) return
+  const { state, view } = instance
+  const table = tableAtSelection(state.selection)
+  if (!table) return
+
+  const borders = changeTableBorders(readTableBorders(table.node.attrs.borders), change)
+  const transaction = state.tr.setNodeAttribute(table.start - 1, 'borders', borders)
+  if (!transaction.doc.eq(state.doc)) view.dispatch(closeHistory(transaction))
+  view.focus()
+}
+
+const alignTableCells = (requested: TableCellAlignment) => {
+  const instance = editor.value
+  if (!instance) return
+
+  const { state, view } = instance
+  const { available, alignment } = readTableCellAlignment(state.selection)
+  if (!available) return
+
+  const reset = alignment?.textAlign === requested.textAlign
+    && alignment?.verticalAlign === requested.verticalAlign
+  const textAlign = reset ? null : requested.textAlign
+  const verticalAlign = reset ? null : requested.verticalAlign
+  const transaction = state.tr
+  forEachCellAtSelection(state.selection, (cell, position) => {
+    if (cell.attrs.textAlign !== textAlign) transaction.setNodeAttribute(position, 'textAlign', textAlign)
+    if (cell.attrs.verticalAlign !== verticalAlign) transaction.setNodeAttribute(position, 'verticalAlign', verticalAlign)
+  })
+  if (transaction.docChanged) view.dispatch(closeHistory(transaction))
+  view.focus()
+}
+
+const editTableCells = (action: TableCellAction) => {
+  const instance = editor.value
+  if (!instance) return
+  const { state, view } = instance
+  const changed = tableCellCommands[action](state, transaction => view.dispatch(closeHistory(transaction)))
+  if (changed) view.focus()
+}
+
 const toggleTableHeader = () => {
   const instance = editor.value
   if (!instance) return
@@ -968,6 +1213,76 @@ const toggleTableHeader = () => {
 
   instance.view.dispatch(closeHistory(transaction))
   instance.view.focus()
+}
+
+const toggleTableNumbered = () => {
+  const instance = editor.value
+  if (!instance) return
+  const { state, view } = instance
+  const table = tableAtSelection(state.selection)
+  if (!table) return
+
+  const numbered = table.node.attrs.isNumbered !== true
+  view.dispatch(closeHistory(state.tr.setNodeAttribute(table.start - 1, 'isNumbered', numbered)))
+  view.focus()
+}
+
+const columnSettingsPageWidth = (doc: ProseMirrorNode, position: number) => {
+  const page = pageAtPosition(doc, position)
+  if (!page) return null
+  const { width } = pageDimensions(readPageOrientation(page.node.attrs.orientation))
+  const { marginLeft, marginRight } = pageMarginsFromNode(page.node)
+  return toColumnUnits((width - marginLeft - marginRight) / 10)
+}
+
+const showTableColumnSettings = () => {
+  const instance = editor.value
+  const dialog = tableColumnDialog.value
+  if (!instance || !dialog) return
+  const { state } = instance
+  const table = tableAtSelection(state.selection)
+  if (!table) return
+  const availableWidth = columnSettingsPageWidth(state.doc, table.start)
+  if (availableWidth === null) return
+
+  const indentLeft = toColumnUnits(readTableIndent(table.node.attrs.indentLeft))
+  const widths = widthUnitsFromFractions(tableColumnFractions(table.node), Math.max(0, availableWidth - indentLeft))
+  if (!widths.length) return
+
+  const settings: TableColumnSettings = {
+    availableWidth,
+    layout: { widths, indentLeft },
+    subjectIndex: table.node.attrs.isNumbered === true ? (widths.length > 1 ? 1 : null) : 0,
+  }
+  tableColumnTarget = { position: table.start - 1, node: table.node, settings }
+  dialog.show(settings)
+}
+
+const applyTableColumnSettings = (layout: TableColumnLayout) => {
+  const instance = editor.value
+  const target = tableColumnTarget
+  if (!instance || !target) return false
+  const { state, view } = instance
+  const { position, node, settings } = target
+  if (state.doc.nodeAt(position) !== node || columnSettingsPageWidth(state.doc, position + 1) !== settings.availableWidth) {
+    return false
+  }
+  if (layout.indentLeft === settings.layout.indentLeft
+    && layout.widths.every((width, index) => width === settings.layout.widths[index])) return true
+
+  const widths = layout.widths.map(toColumnPixels)
+  const transaction = resizeTableColumns(state, position, node, widths) ?? state.tr
+  if (layout.indentLeft !== settings.layout.indentLeft) {
+    transaction.setNodeAttribute(position, 'indentLeft', toCentimeters(layout.indentLeft))
+  }
+  if (transaction.docChanged) view.dispatch(closeHistory(transaction))
+  return true
+}
+
+const closeTableColumnSettings = () => {
+  tableColumnTarget = null
+  const instance = editor.value
+  if (instance && !instance.isDestroyed) instance.view.focus()
 }
 
 const undo = () => {
@@ -989,28 +1304,35 @@ const toggleInlineFormat = (format: InlineFormat) => {
 defineExpose({
   getJSON, undo, redo, setBlockStyle, setBlockFontSize, toggleInlineFormat,
   setCurrentPageOrientation, setCurrentPageMargins, insertTable,
-  toggleTableHeader,
+  toggleTableHeader, toggleTableNumbered, setTableBorders, showTableColumnSettings, editTableCells, alignTableCells,
 })
 </script>
 
 <template>
   <div
     class="word-editor-canvas"
-    :class="{ 'is-ribbon-panel-pinned': ribbonPanelPinned }"
+    :class="{
+      'is-ribbon-panel-pinned': ribbonPanelPinned,
+      'is-table-gridlines-hidden': !showTableGridlines,
+    }"
     :style="{
       '--document-width': `${documentWidth}mm`,
-      '--current-page-width': `${currentPageDimensions.width}mm`,
-      '--current-page-height': `${currentPageDimensions.height}mm`,
+      '--current-page-width': `${rulerPage.dimensions.width}mm`,
+      '--current-page-height': `${rulerPage.dimensions.height}mm`,
     }"
   >
     <WordRulers
       v-if="showRulers"
-      :current-page-number="currentPageNumber"
-      :page-width="currentPageDimensions.width"
-      :page-height="currentPageDimensions.height"
-      :page-offset="currentPageOffset"
-      :margins="currentPageMargins"
-      :paragraph-indent="paragraphIndent"
+      :current-page-number="rulerPage.number"
+      :page-width="rulerPage.dimensions.width"
+      :page-height="rulerPage.dimensions.height"
+      :page-offset="rulerPage.offset"
+      :margins="rulerPage.margins"
+      :paragraph-indent="columnResizeRuler && !columnResizeRuler.context.cell ? null : paragraphIndent"
+      :table-ruler="columnResizeRuler?.context ?? tableRuler"
+      :column-resize-preview="rulerColumnPreview"
+      @column-resize="updateTableColumns"
+      @table-indent-change="updateTableIndent"
       @margin-change="updateCurrentPageMargin"
       @indent-change="updateBlockIndent"
     />
@@ -1018,7 +1340,19 @@ defineExpose({
     <main class="document-workspace">
       <EditorContent v-if="editor" :editor="editor" class="paginated-editor" />
     </main>
+    <TableColumnSettingsDialog
+      ref="tableColumnDialog"
+      :apply="applyTableColumnSettings"
+      @closed="closeTableColumnSettings"
+    />
     <WordTableInsertControls v-if="editor" :editor="editor" />
+    <WordTableResizeControls
+      v-if="editor"
+      :editor="editor"
+      @column-resize-start="startColumnResizeRuler"
+      @column-resize-preview="updateColumnResizeRuler"
+      @column-resize-end="stopColumnResizeRuler"
+    />
   </div>
 </template>
 
