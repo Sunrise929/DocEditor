@@ -834,8 +834,6 @@ const Pagination = Extension.create({
               }
               requestRun()
             },
-美少女·抓宠·大世界，我全都要！参与活动赢iPhone、PS5等惊喜大奖
-https://azurpromilia美少女.manjuu.com/?utm_campaign=SHARE&utm_source=PGCPSH&inviteCode=LHHBMNR4#explore
             destroy() {
               destroyed = true
               if (animationFrame !== null) {
