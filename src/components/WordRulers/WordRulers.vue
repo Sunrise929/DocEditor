@@ -15,6 +15,7 @@ const props = defineProps<{
   pageOffset: number
   margins: PageMargins
   paragraphIndent: ParagraphIndent | null
+  paragraphNumberGap?: number
   tableRuler: TableRulerContext | null
   columnResizePreview: { index: number; offset: number } | null
 }>()
@@ -79,11 +80,13 @@ const stopPrecision = () => {
 const shownIndent = computed(() => {
   const indent = props.paragraphIndent
   const drag = indentDrag.value
-  if (!indent || !drag) return indent
-  if (props.tableRuler?.cell) return adjustCellIndent(indent, drag.handle, drag.delta, indentWidth.value)
+  if (!indent) return null
+  const gap = props.paragraphNumberGap
+  if (!drag) return gap === undefined ? indent : { ...indent, firstLineOffset: Math.min(indent.firstLineOffset, -gap) }
+  if (props.tableRuler?.cell) return adjustCellIndent(indent, drag.handle, drag.delta, indentWidth.value, gap)
   return adjustIndent(
     indent, drag.handle, drag.delta, indentWidth.value,
-    props.margins.marginLeft / 10, props.margins.marginRight / 10,
+    props.margins.marginLeft / 10, props.margins.marginRight / 10, gap,
   )
 })
 

@@ -7,6 +7,7 @@ defineOptions({ name: 'WordTitleBar' })
 
 const emit = defineEmits<{
   save: []
+  printJson: []
   undo: []
   redo: []
 }>()
@@ -39,6 +40,19 @@ const emit = defineEmits<{
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M5 3h12l2 2v16H5z" />
           <path d="M8 3v6h8V3M8 21v-8h8v8" />
+        </svg>
+      </ElButton>
+
+      <ElButton
+        text
+        class="word-titlebar-button"
+        title="打印 JSON"
+        aria-label="打印 JSON"
+        @click="emit('printJson')"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M9 4H7a2 2 0 0 0-2 2v3l-2 3 2 3v3a2 2 0 0 0 2 2h2" />
+          <path d="M15 4h2a2 2 0 0 1 2 2v3l2 3-2 3v3a2 2 0 0 1-2 2h-2" />
         </svg>
       </ElButton>
 

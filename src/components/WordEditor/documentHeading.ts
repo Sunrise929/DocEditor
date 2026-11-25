@@ -15,12 +15,14 @@ export const blockStyleOptions: { value: DocumentBlockStyle; label: string }[] =
 export const isHeadingLevel = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= 1
 
+export const headingNumberType = 'headingNumber'
+
 const nativeHeadingLevels = [1, 2, 3, 4, 5, 6]
 
 export const DocumentHeading = Node.create({
   name: 'heading',
   group: 'block',
-  content: 'inline*',
+  content: `${headingNumberType}? inline*`,
   defining: true,
 
   addAttributes() {
@@ -44,6 +46,7 @@ export const DocumentHeading = Node.create({
     const level = isHeadingLevel(node.attrs.level) ? node.attrs.level : 1
     const attrs = mergeAttributes(HTMLAttributes, {
       'data-heading-level': level,
+      ...(node.firstChild?.type.name === headingNumberType ? { style: 'text-indent: 0' } : {}),
     })
     if (level <= 6) return [`h${level}`, attrs, 0]
     return ['div', { ...attrs, role: 'heading', 'aria-level': level }, 0]

@@ -106,6 +106,24 @@
   overflow-wrap: anywhere;
 }
 
+:is(p, [data-heading-level]):has(> [data-heading-number]) {
+  position: relative;
+}
+
+[data-number-marker] {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform: translateX(min(var(--word-number-offset), calc(-100% - var(--word-number-gap))));
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
+}
+
+[data-heading-number]::before {
+  content: attr(data-number-label);
+}
+
 [data-page-content] div:has(> table[data-document-table]) {
   overflow: auto;
 }

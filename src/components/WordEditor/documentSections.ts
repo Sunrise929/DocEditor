@@ -78,18 +78,14 @@ export const sectionBlockBoundary = ($pos: ResolvedPos) => {
   return null
 }
 
-export const sectionedContent = (content: JSONContent) => {
-  if (content.type !== 'doc') return content
-  if (content.content?.some(node => node.type === 'section')) return content
-  return {
-    ...content,
-    content: [{
-      type: 'section',
-      attrs: { id: newSectionId() },
-      content: content.content?.length ? content.content : [{ type: 'page', content: [{ type: 'paragraph' }] }],
-    }],
-  }
-}
+export const createBlankDocument = (): JSONContent => ({
+  type: 'doc',
+  content: [{
+    type: 'section',
+    attrs: { id: newSectionId() },
+    content: [{ type: 'page', content: [{ type: 'paragraph' }] }],
+  }],
+})
 
 export const DocumentSection = Node.create({
   name: 'section',

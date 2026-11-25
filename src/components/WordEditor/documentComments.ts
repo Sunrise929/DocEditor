@@ -1,9 +1,9 @@
-import { commands, Mark, type Editor, type JSONContent, type RawCommands } from '@tiptap/core'
+import { commands, Mark, type Editor, type RawCommands } from '@tiptap/core'
 import { Fragment, Slice, type MarkType, type Node as ProseMirrorNode } from '@tiptap/pm/model'
 import { closeHistory } from '@tiptap/pm/history'
 import { Plugin, PluginKey, TextSelection, type EditorState, type Transaction } from '@tiptap/pm/state'
 import { Decoration, DecorationSet } from '@tiptap/pm/view'
-import { forEachDocumentPage, sectionedContent } from './documentSections'
+import { forEachDocumentPage } from './documentSections'
 
 type TextRange = { from: number; to: number }
 type MovedRange = TextRange & { destination: number }
@@ -44,9 +44,7 @@ export const readCommentThreads = (doc: { attrs?: Record<string, unknown> }): Co
 
 // Tiptap replaces the root's children in setContent. Load the saved root attribute in the same transaction.
 export const setContentWithComments: RawCommands['setContent'] = (content, options) => props => {
-  const input = content && typeof content === 'object' && 'type' in content && typeof content.type === 'string'
-    ? sectionedContent(content as JSONContent) : content
-  const applied = commands.setContent(input, options)(props)
+  const applied = commands.setContent(content, options)(props)
   if (applied && props.dispatch) {
     const threads = content && typeof content === 'object' && 'attrs' in content ? readCommentThreads(content) : []
     const ids = new Set(threads.map(thread => thread.id))

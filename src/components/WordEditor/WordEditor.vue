@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Extension, findParentNodeClosestToPos, mergeAttributes, Node as TiptapNode, type Attributes, type Editor } from '@tiptap/core'
 import { CodeBlock } from '@tiptap/extension-code-block'
+import { OrderedList } from '@tiptap/extension-list'
 import { TableKit } from '@tiptap/extension-table'
 import StarterKit from '@tiptap/starter-kit'
 import { closeHistory } from '@tiptap/pm/history'
@@ -28,11 +29,14 @@ import {
 import { isEmptyCell, ProtectRuledCells, readCellLine, type CellLine, type CellLineState } from './cellLines'
 import { DocumentComment, retainCommentDraftOnMove, setContentWithComments } from './documentComments'
 import {
-  currentSection, DocumentSection, documentLayout, documentPageElements, emptyPage, forEachDocumentPage,
-  newSectionId, pageAtPosition, sectionBlockBoundary, sectionControls, sectionLabel, sectionedContent,
+  createBlankDocument, currentSection, DocumentSection, documentLayout, documentPageElements, emptyPage, forEachDocumentPage,
+  newSectionId, pageAtPosition, sectionBlockBoundary, sectionControls, sectionLabel,
   type PageEntry, type SectionAction, type SectionStatus,
 } from './documentSections'
 import { DocumentHeading, isHeadingLevel, type DocumentBlockStyle } from './documentHeading'
+import {
+  DocumentNumbering, HeadingNumber, NumberedParagraph, readBlockNumbering, readNumberingGap,
+} from './documentNumbering'
 import {
   DocumentTable, DocumentTableCell, DocumentTableRow, PreventNestedTables,
   readTableColumnWidths, readTableIndent, tableAtSelection,
@@ -95,6 +99,7 @@ const commentLaneVisible = ref(false)
 let layoutDoc: ProseMirrorNode | undefined
 let pageOrientations: PageOrientation[] = []
 const paragraphIndent = ref<ParagraphIndent | null>(null)
+const paragraphNumberGap = ref<number>()
 const tableBordersDialog = ref<InstanceType<typeof TableBordersDialog> | null>(null)
 let tableBordersTarget: { position: number; node: ProseMirrorNode } | null = null
 const tableColumnDialog = ref<InstanceType<typeof TableColumnSettingsDialog> | null>(null)
@@ -143,7 +148,8 @@ const BlockIndentation = Extension.create({
           parseHTML: (element: HTMLElement) => marginValue(element.getAttribute(attribute), 0),
           renderHTML: (attrs: Record<string, unknown>) => {
             const value = marginValue(attrs[key], 0)
-            return value ? { [attribute]: value, style: `${property}: ${value}cm` } : {}
+            if (!value) return {}
+            return { [attribute]: value, style: `${property}: ${value}cm` }
           },
         }]
       })),
@@ -160,6 +166,8 @@ const readIndent = (node: ProseMirrorNode): ParagraphIndent => ({
 const syncBlockIndent = (instance: Editor) => {
   const { $head } = instance.state.selection
   const next = isIndentableBlock($head.parent) ? readIndent($head.parent) : null
+  paragraphNumberGap.value = next && readBlockNumbering($head.parent)
+    ? readNumberingGap(instance.view, $head.before()) : undefined
   const previous = paragraphIndent.value
   if (next ? !previous || indentKeys.some(key => next[key] !== previous[key]) : previous) {
     paragraphIndent.value = next
@@ -826,7 +834,8 @@ const Pagination = Extension.create({
               }
               requestRun()
             },
-
+美少女·抓宠·大世界，我全都要！参与活动赢iPhone、PS5等惊喜大奖
+https://azurpromilia美少女.manjuu.com/?utm_campaign=SHARE&utm_source=PGCPSH&inviteCode=LHHBMNR4#explore
             destroy() {
               destroyed = true
               if (animationFrame !== null) {
@@ -867,7 +876,9 @@ const DocumentCodeBlock = CodeBlock.extend({
 // create 100+ independent editors, histories, and event systems.
 const editor = useEditor({
   extensions: [
-    StarterKit.configure({ document: false, heading: false, codeBlock: false }),
+    StarterKit.configure({ document: false, paragraph: false, heading: false, codeBlock: false, orderedList: false }),
+    NumberedParagraph,
+    OrderedList.extend({ addInputRules: () => [] }),
     TableKit.configure({
       table: false,
       tableCell: false,
@@ -881,7 +892,9 @@ const editor = useEditor({
     ProtectRuledCells,
     DocumentCodeBlock,
     DocumentHeading,
+    HeadingNumber,
     BlockIndentation,
+    DocumentNumbering,
     BlockFontSize,
     InlineTextStyle,
     DocumentComment,
@@ -891,7 +904,7 @@ const editor = useEditor({
     Page,
     Pagination,
   ],
-  content: sectionedContent({ type: 'doc' }),
+  content: createBlankDocument(),
   onBeforeCreate: ({ editor: instance }) => {
     try {
       const saved = readLocalDocument(instance.schema)
@@ -992,8 +1005,8 @@ const setBlockStyle = (style: DocumentBlockStyle) => {
   if (!target) return
   const parent = $head.node($head.depth - 1)
   const index = $head.index($head.depth - 1)
-  if (!parent.canReplaceWith(index, index + 1, target, block.marks)
-      || !target.validContent(block.content)) return
+  if (!parent.canReplaceWith(index, index + 1, target, block.marks) ||
+      !target.validContent(block.content)) return
 
   if (target !== block.type || (style !== 'paragraph' && block.attrs.level !== style)) {
     const formatting = {
@@ -1038,6 +1051,7 @@ const updateBlockIndent = (handle: IndentHandle, delta: number) => {
     const { marginLeft, marginRight } = pageMarginsFromNode(page.node)
     const { width } = pageDimensions(readPageOrientation(page.node.attrs.orientation))
     const before = readIndent(node)
+    const numberGap = readBlockNumbering(node) ? readNumberingGap(view, pos) : undefined
     const cell = cellAtPosition(doc.resolve(pos + 1))
     let after: ParagraphIndent
     if (cell) {
@@ -1052,9 +1066,9 @@ const updateBlockIndent = (handle: IndentHandle, delta: number) => {
         if (!cellWidth) return false
         cellWidths.set(cell.pos, cellWidth)
       }
-      after = adjustCellIndent(before, handle, delta, cellWidth)
+      after = adjustCellIndent(before, handle, delta, cellWidth, numberGap)
     } else {
-      after = adjustIndent(before, handle, delta, (width - marginLeft - marginRight) / 10, marginLeft / 10, marginRight / 10)
+      after = adjustIndent(before, handle, delta, (width - marginLeft - marginRight) / 10, marginLeft / 10, marginRight / 10, numberGap)
     }
     if (indentKeys.some(key => before[key] !== after[key])) {
       tr.setNodeMarkup(pos, undefined, { ...node.attrs, ...after })
@@ -1410,6 +1424,7 @@ defineExpose({
       :page-offset="rulerPage.offset"
       :margins="rulerPage.margins"
       :paragraph-indent="columnResizeRuler && !columnResizeRuler.context.cell ? null : paragraphIndent"
+      :paragraph-number-gap="paragraphNumberGap"
       :table-ruler="columnResizeRuler?.context ?? tableRuler"
       :column-resize-preview="rulerColumnPreview"
       @column-resize="updateTableColumns"

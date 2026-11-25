@@ -56,6 +56,11 @@ const syncFontSize = (size: number | null, available: boolean) => {
   canSetFontSize.value = available
 }
 
+const printDocument = () => {
+  const json = wordEditor.value?.getJSON()
+  if (json) console.log(json)
+}
+
 const saveDocument = () => {
   const json = wordEditor.value?.getJSON()
   if (!json) return
@@ -74,6 +79,7 @@ const saveDocument = () => {
     <div class="word-editor-shell">
       <WordTitleBar
         @save="saveDocument"
+        @print-json="printDocument"
         @undo="wordEditor?.undo()"
         @redo="wordEditor?.redo()"
       />

@@ -9,7 +9,7 @@ import { CellSelection, cellAround, mergeCells, selectedRect, splitCell, TableMa
 import { cellLineAttribute } from './cellLines'
 import { readTableHeaderRows, toggleTableHeaderRows } from './tableHeaderRows'
 import { pageContentWidthCm } from './pageGeometry'
-import { COLUMN_WIDTH_TOLERANCE, pixelsToCentimeters, setTableColumnWidths } from './tableColumnLayout'
+import { COLUMN_WIDTH_TOLERANCE, setTableColumnWidths } from './tableColumnLayout'
 import { defaultTableBorders, parseTableBorders, readTableBorders, tableBorderCss, tableBorderPlugin } from './tableBorders'
 
 export const MIN_TABLE_COLUMN_WIDTH = 18
@@ -257,15 +257,7 @@ const documentCellAttributes = (attributes: Attributes = {}): Attributes => ({
   textAlign: alignmentAttribute('textAlign', 'text-align', horizontalAlignments, 'left'),
   colwidth: {
     ...attributes.colwidth,
-    parseHTML: (element: HTMLElement) => {
-      const widthsCm = parseColumnWidths(element.getAttribute('data-colwidth-cm'))
-      if (widthsCm) return widthsCm
-
-      const legacyWidths = parseColumnWidths(element.getAttribute('colwidth'))
-        ?? parseColumnWidths(element.getAttribute('data-colwidth'))
-        ?? attributes.colwidth?.parseHTML?.(element)
-      return Array.isArray(legacyWidths) ? legacyWidths.map(pixelsToCentimeters) : null
-    },
+    parseHTML: (element: HTMLElement) => parseColumnWidths(element.getAttribute('data-colwidth-cm')),
     renderHTML: attrs => attrs.colwidth ? { 'data-colwidth-cm': attrs.colwidth.join(',') } : {},
   },
 })
