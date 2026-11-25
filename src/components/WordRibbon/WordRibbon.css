@@ -173,6 +173,7 @@
 }
 
 .word-orientation-icon,
+.word-section-icon,
 .word-margins-icon {
   position: relative;
   width: 40px;
@@ -189,12 +190,21 @@
   content: "";
 }
 
+.word-section-icon::before,
 .word-margins-icon::before {
   position: absolute;
   inset: 1px 7px;
   border: 2px solid currentColor;
   border-radius: 2px;
   background: #fff;
+  content: "";
+}
+
+.word-section-icon::after {
+  position: absolute;
+  top: 17px;
+  inset-inline: 5px;
+  border-top: 2px dashed #185abd;
   content: "";
 }
 

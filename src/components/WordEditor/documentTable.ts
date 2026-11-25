@@ -1,3 +1,4 @@
+import { forEachDocumentPage } from './documentSections'
 import { Extension, findParentNodeClosestToPos, mergeAttributes, type Attributes, type CommandProps } from '@tiptap/core'
 import { Table, TableCell, TableRow, TableView } from '@tiptap/extension-table'
 import { isHistoryTransaction } from '@tiptap/pm/history'
@@ -96,7 +97,7 @@ const normalizeTableColumnWidths = () => {
       if (!transactions.some(tr => tr.docChanged || tr.getMeta(normalizeWidths))) return null
       const tr = state.tr
 
-      state.doc.forEach((page, pagePos) => {
+      forEachDocumentPage(state.doc, (page, pagePos) => {
         if (page.type.name !== 'page' || checkedPages.has(page)) return
         const pageWidth = pageContentWidthCm(page.attrs)
         page.forEach((table, offset) => {
@@ -113,7 +114,7 @@ const normalizeTableColumnWidths = () => {
           setTableColumnWidths(tr, pagePos + 1 + offset, table, widths.map(width => width * scale))
         })
       })
-      tr.doc.forEach(page => checkedPages.add(page))
+      forEachDocumentPage(tr.doc, page => checkedPages.add(page))
       return tr.docChanged ? tr : null
     },
   })

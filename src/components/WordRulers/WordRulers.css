@@ -6,12 +6,13 @@
   border-bottom: 1px solid #cbd0d8;
   background: #e5e7eb;
   padding-top: 3px;
+  padding-right: var(--word-comment-lane, 0px);
 }
 
 .word-current-page-indicator {
   position: absolute;
   top: 7px;
-  left: max(4px, calc(50% - var(--current-page-width) / 2 - 62px));
+  left: max(4px, calc((100% - var(--word-comment-lane, 0px)) / 2 - var(--current-page-width) / 2 - 62px));
   color: #5c6573;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 11px;
@@ -38,7 +39,7 @@
 .word-vertical-ruler-shell {
   position: absolute;
   z-index: 14;
-  left: calc(50% - var(--current-page-width) / 2 - 32px);
+  left: calc((100% - var(--word-comment-lane, 0px)) / 2 - var(--current-page-width) / 2 - 32px);
   width: 26px;
   height: var(--current-page-height);
 }

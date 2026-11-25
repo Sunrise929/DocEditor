@@ -8,12 +8,16 @@ import { Fragment, Slice, type Node as ProseMirrorNode } from '@tiptap/pm/model'
 import { Plugin, Selection, TextSelection, type Transaction } from '@tiptap/pm/state'
 import { CellSelection } from '@tiptap/pm/tables'
 import { canJoin } from '@tiptap/pm/transform'
-import { ElMessage } from 'element-plus'
+import { ElButton, ElDialog, ElInput, ElMessage } from 'element-plus'
+import 'element-plus/es/components/dialog/style/css'
+import 'element-plus/es/components/input/style/css'
+import 'element-plus/es/components/button/style/css'
 import 'element-plus/es/components/message/style/css'
 import { EditorContent, useEditor } from '@tiptap/vue-3'
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
+import WordComments from './WordComments.vue'
 import WordRulers from '../WordRulers/WordRulers.vue'
-import WordTableContextMenu from './WordTableContextMenu.vue'
+import WordEditorContextMenu from './WordEditorContextMenu.vue'
 import WordTableInsertControls from './WordTableInsertControls.vue'
 import WordTableResizeControls from './WordTableResizeControls.vue'
 import TableBordersDialog from './TableBordersDialog.vue'
@@ -22,13 +26,20 @@ import {
   BlockFontSize, InlineTextStyle, parseFontSize, readSelectionFontSize, setFontSizeAtCursor, setFontSizeInCells,
 } from './blockFontSize'
 import { isEmptyCell, ProtectRuledCells, readCellLine, type CellLine, type CellLineState } from './cellLines'
-import { blockStyleOptions, DocumentHeading, isHeadingLevel, type DocumentBlockStyle } from './documentHeading'
+import { DocumentComment, retainCommentDraftOnMove, setContentWithComments } from './documentComments'
+import {
+  currentSection, DocumentSection, documentLayout, documentPageElements, emptyPage, forEachDocumentPage,
+  newSectionId, pageAtPosition, sectionBlockBoundary, sectionControls, sectionLabel, sectionedContent,
+  type PageEntry, type SectionAction, type SectionStatus,
+} from './documentSections'
+import { DocumentHeading, isHeadingLevel, type DocumentBlockStyle } from './documentHeading'
 import {
   DocumentTable, DocumentTableCell, DocumentTableRow, PreventNestedTables,
   readTableColumnWidths, readTableIndent, tableAtSelection,
   type TableCellAlignment, type TableCellAlignmentState,
 } from './documentTable'
 import { inlineFormatCommands, type InlineFormat, type InlineFormatState } from './inlineFormatting'
+import { readLocalDocument } from './localDocument'
 import {
   cellAtPosition, cellTextBox, readTableRuler, resizeTableColumns, resizeTableColumnsFromPixels,
   type ColumnResizeTarget, type TableRulerContext,
@@ -45,6 +56,7 @@ import { adjustCellIndent, adjustIndent, indentDefaults, type IndentHandle, type
 defineOptions({ name: 'WordEditor' })
 
 const emit = defineEmits<{
+  sectionChange: [status: SectionStatus]
   blockStyleChange: [style: DocumentBlockStyle | null]
   blockFontSizeChange: [size: number | null, available: boolean]
   inlineFormatsChange: [formats: InlineFormatState]
@@ -66,18 +78,20 @@ const props = withDefaults(defineProps<{
   ribbonPanelPinned: true,
 })
 
-type PageEntry = {
-  node: ProseMirrorNode
-  pos: number
-}
-
 type MarginKey = keyof PageMargins
 
+const sectionStatus = ref<SectionStatus>({ number: 1, name: '', total: 1, canSplit: true })
+const sectionRenameId = ref<string | null>(null)
+const sectionRenameVisible = ref(false)
+const sectionNameDraft = ref('')
+const sectionNameInput = ref<InstanceType<typeof ElInput> | null>(null)
+const pendingSectionName = ref<string | null>(null)
 const currentPageNumber = ref(1)
 const currentPageMargins = ref<PageMargins>({ ...DEFAULT_PAGE_MARGINS })
 const currentPageDimensions = ref(pageDimensions('portrait'))
 const currentPageOffset = ref(0)
 const documentWidth = ref(currentPageDimensions.value.width)
+const commentLaneVisible = ref(false)
 let layoutDoc: ProseMirrorNode | undefined
 let pageOrientations: PageOrientation[] = []
 const paragraphIndent = ref<ParagraphIndent | null>(null)
@@ -261,30 +275,9 @@ const syncTableTools = (instance: Editor) => {
 
 const pageMarginsFromNode = (node: ProseMirrorNode) => readPageMargins(node.attrs)
 
-const pageAtPosition = (
-  doc: ProseMirrorNode,
-  position: number,
-): (PageEntry & { index: number }) | null => {
-  let pos = 0
-
-  for (let index = 0; index < doc.childCount; index += 1) {
-    const node = doc.child(index)
-    if (
-      node.type.name === 'page' &&
-      position >= pos &&
-      position <= pos + node.nodeSize
-    ) {
-      return { node, pos, index }
-    }
-
-    pos += node.nodeSize
-  }
-
-  return null
-}
-
 const readPageOffset = (instance: Editor, position: number) => {
-  const firstPage = instance.view.nodeDOM(0)
+  const firstPagePosition = documentLayout(instance.state.doc).pages[0]?.pos
+  const firstPage = firstPagePosition === undefined ? null : instance.view.nodeDOM(firstPagePosition)
   const page = instance.view.nodeDOM(position)
   return firstPage instanceof HTMLElement && page instanceof HTMLElement
     ? page.getBoundingClientRect().top - firstPage.getBoundingClientRect().top : null
@@ -299,7 +292,7 @@ const syncCurrentPage = (editorInstance: Editor) => {
   if (doc !== layoutDoc) {
     layoutDoc = doc
     const nextOrientations: PageOrientation[] = []
-    doc.forEach((node) => {
+    forEachDocumentPage(doc, (node) => {
       nextOrientations.push(readPageOrientation(node.attrs.orientation))
     })
     layoutChanged = nextOrientations.length !== pageOrientations.length
@@ -326,35 +319,30 @@ const syncCurrentPage = (editorInstance: Editor) => {
 }
 
 const removePageWrappersFromClipboard = (slice: Slice) => {
-  const copiedNodes: ProseMirrorNode[] = []
-  let containsPage = false
+  const isWrapper = (node: ProseMirrorNode) => node.type.name === 'page' || node.type.name === 'section'
+  const unwrap = (node: ProseMirrorNode): ProseMirrorNode[] =>
+    isWrapper(node) ? node.children.flatMap(unwrap) : [node]
+  const openDepth = (node: ProseMirrorNode | null, depth: number, end: boolean): number =>
+    node && depth > 0 && isWrapper(node) ? 1 + openDepth(end ? node.lastChild : node.firstChild, depth - 1, end) : 0
 
-  slice.content.forEach((node) => {
-    if (node.type.name !== 'page') {
-      copiedNodes.push(node)
-      return
-    }
-
-    containsPage = true
-    node.content.forEach((child) => copiedNodes.push(child))
-  })
-
-  if (!containsPage) return slice
-
-  const startsWithPage = slice.content.firstChild?.type.name === 'page'
-  const endsWithPage = slice.content.lastChild?.type.name === 'page'
-
+  if (!slice.content.content.some(isWrapper)) return slice
   return new Slice(
-    Fragment.fromArray(copiedNodes),
-    Math.max(0, slice.openStart - (startsWithPage ? 1 : 0)),
-    Math.max(0, slice.openEnd - (endsWithPage ? 1 : 0)),
+    Fragment.fromArray(slice.content.content.flatMap(unwrap)),
+    slice.openStart - openDepth(slice.content.firstChild, slice.openStart, false),
+    slice.openEnd - openDepth(slice.content.lastChild, slice.openEnd, true),
   )
 }
 
 const PaginatedDocument = TiptapNode.create({
   name: 'doc',
   topNode: true,
-  content: 'page+',
+  content: 'section+',
+  addCommands() {
+    return { setContent: setContentWithComments }
+  },
+  addAttributes() {
+    return { commentThreads: { default: [], rendered: false } }
+  },
 })
 
 const Page = TiptapNode.create({
@@ -429,10 +417,10 @@ const Page = TiptapNode.create({
         if (pageDepth === 0 || $from.index(pageDepth) !== 0 || $from.depth !== pageDepth + 1) return false
 
         const pageIndex = $from.index(pageDepth - 1)
-        if (pageIndex === 0) return false
+        if (pageIndex === 0) return $from.index(pageDepth - 2) > 0
 
         const current = $from.node(pageDepth)
-        const previous = state.doc.child(pageIndex - 1)
+        const previous = $from.node(pageDepth - 1).child(pageIndex - 1)
         const currentPos = $from.before(pageDepth)
         const previousPos = currentPos - previous.nodeSize
         const joinPos = previousPos + 1 + previous.content.size
@@ -506,30 +494,6 @@ const Pagination = Extension.create({
             }
           }
 
-          const pageEntries = (): PageEntry[] => {
-            const entries: PageEntry[] = []
-
-            editorView.state.doc.forEach((node, pos) => {
-              if (node.type.name === 'page') {
-                entries.push({ node, pos })
-              }
-            })
-
-            return entries
-          }
-
-          const pageIndexAt = (position: number) => {
-            let result = 0
-
-            editorView.state.doc.forEach((node, pos, index) => {
-              if (position >= pos && position <= pos + node.nodeSize) {
-                result = index
-              }
-            })
-
-            return result
-          }
-
           const requestRun = (...indexes: number[]) => {
             indexes.forEach((index) => {
               if (index >= 0) dirtyPages.add(index)
@@ -540,15 +504,18 @@ const Pagination = Extension.create({
             }
           }
 
-          const pageElements = () =>
-            Array.from(editorView.dom.querySelectorAll<HTMLElement>(':scope > [data-page]'))
+          const nextInSection = (entries: PageEntry[], index: number) => {
+            const next = entries[index + 1]
+            return next?.section === entries[index]?.section ? next : undefined
+          }
 
-          const isEmptyPage = (page: ProseMirrorNode) => {
-            if (page.childCount === 0) return true
-            if (page.childCount !== 1) return false
-
-            const child = page.firstChild
-            return Boolean(child?.isTextblock && child.content.size === 0)
+          // A page insertion/removal shifts queued indices in later sections.
+          const shiftQueuedPages = (after: number, delta: number) => {
+            for (const queue of [dirtyPages, backwardFlowPages]) {
+              const shifted = [...queue].map(index => index > after ? index + delta : index)
+              queue.clear()
+              shifted.forEach(index => queue.add(index))
+            }
           }
 
           const pixels = (value: string) => Number.parseFloat(value) || 0
@@ -601,6 +568,7 @@ const Pagination = Extension.create({
           }
 
           const preserveMovedSelection = (transaction: Transaction, from: number, to: number, destination: number) => {
+            retainCommentDraftOnMove(transaction, from, to, destination)
             const { selection } = editorView.state
             if (!(selection instanceof TextSelection)) return
             const inside = (position: number) => position >= from && position < to
@@ -619,13 +587,17 @@ const Pagination = Extension.create({
             pageIndex: number,
             entries: PageEntry[],
           ) => {
-            const next = entries[pageIndex + 1]
-            if (!next || !isEmptyPage(next.node)) return false
+            const next = nextInSection(entries, pageIndex)
+            // A blank paragraph still occupies a line and may hold the caret after Enter.
+            if (!next || next.node.childCount !== 0) return false
 
             const transaction = editorView.state.tr.delete(
               next.pos,
               next.pos + next.node.nodeSize,
             )
+            dirtyPages.delete(pageIndex + 1)
+            backwardFlowPages.delete(pageIndex + 1)
+            shiftQueuedPages(pageIndex, -1)
             dispatchPagination(transaction)
             backwardFlowPages.add(pageIndex)
             requestRun(pageIndex)
@@ -663,7 +635,7 @@ const Pagination = Extension.create({
 
             const movingFrom = current.pos + 1 + movingOffset
             const movingTo = current.pos + 1 + current.node.content.size
-            const next = entries[pageIndex + 1]
+            const next = nextInSection(entries, pageIndex)
             const transaction = editorView.state.tr.delete(movingFrom, movingTo)
             let destination: number
 
@@ -675,6 +647,7 @@ const Pagination = Extension.create({
               if (!pageType) return false
 
               const newPage = pageType.create(fitPageMargins(pageMarginsFromNode(current.node), 'portrait'), movingContent)
+              shiftQueuedPages(pageIndex, 1)
               const pagePosition = transaction.mapping.map(current.pos + current.node.nodeSize)
               transaction.insert(pagePosition, newPage)
               destination = pagePosition + 1
@@ -689,10 +662,10 @@ const Pagination = Extension.create({
           const pullFirstBlockBackward = (
             pageIndex: number,
             entries: PageEntry[],
-            elements: HTMLElement[],
+            elements: ArrayLike<HTMLElement>,
           ) => {
             const current = entries[pageIndex]
-            const next = entries[pageIndex + 1]
+            const next = nextInSection(entries, pageIndex)
             const currentContent = elements[pageIndex]?.querySelector<HTMLElement>(
               '[data-page-content]',
             )
@@ -715,12 +688,8 @@ const Pagination = Extension.create({
 
             const { top: contentTop, bottom: contentBottom } =
               contentBounds(currentContent)
-            const currentIsEmpty = isEmptyPage(current.node)
             const lastElement = currentContent.lastElementChild as HTMLElement | null
-            const occupiedBottom =
-              currentIsEmpty || !lastElement
-                ? contentTop
-                : outerBlockBottom(lastElement)
+            const occupiedBottom = lastElement ? outerBlockBottom(lastElement) : contentTop
             const availableHeight = contentBottom - occupiedBottom
             if (availableHeight <= 2) return false
             let index = 0
@@ -741,15 +710,7 @@ const Pagination = Extension.create({
             const movingTo = movingFrom + movingSize
             const movingContent = next.node.content.cut(0, movingSize)
             const transaction = editorView.state.tr.delete(movingFrom, movingTo)
-            let insertAt = current.pos + 1 + current.node.content.size
-
-            if (currentIsEmpty && current.node.content.size > 0) {
-              transaction.delete(
-                current.pos + 1,
-                current.pos + 1 + current.node.content.size,
-              )
-              insertAt = current.pos + 1
-            }
+            const insertAt = current.pos + 1 + current.node.content.size
 
             transaction.insert(insertAt, movingContent)
 
@@ -768,8 +729,8 @@ const Pagination = Extension.create({
             const pageIndex = Math.min(...dirtyPages)
             dirtyPages.delete(pageIndex)
 
-            const entries = pageEntries()
-            const elements = pageElements()
+            const entries = documentLayout(editorView.state.doc).pages
+            const elements = documentPageElements(editorView.dom)
             const current = entries[pageIndex]
             const contentElement = elements[pageIndex]?.querySelector<HTMLElement>(
               '[data-page-content]',
@@ -818,33 +779,52 @@ const Pagination = Extension.create({
             if (dirtyPages.size > 0) requestRun()
           }
 
-          requestRun(0)
+          requestRun(...documentLayout(editorView.state.doc).pages.map(page => page.index))
 
           return {
             update(view, previousState) {
-              if (internalDispatch || view.state.doc.eq(previousState.doc)) return
+              if (internalDispatch || view.state.doc.content.eq(previousState.doc.content)) return
 
-              const currentPage = pageIndexAt(view.state.selection.from)
-              const contentWasDeleted =
-                view.state.doc.content.size < previousState.doc.content.size
-
-              if (contentWasDeleted) {
-                backwardFlowPages.add(currentPage - 1)
-                backwardFlowPages.add(currentPage)
-              } else {
-                backwardFlowPages.delete(currentPage - 1)
-                backwardFlowPages.delete(currentPage)
+              const previous = documentLayout(previousState.doc)
+              const current = documentLayout(view.state.doc)
+              const oldPages = new Map(previous.pages.map(page => [page.node, page]))
+              const newPages = new Map(current.pages.map(page => [page.node, page]))
+              // Retain scheduled work by section and local page if a document command shifted it.
+              for (const queue of [dirtyPages, backwardFlowPages]) {
+                const pending = [...queue]
+                queue.clear()
+                for (const index of pending) {
+                  const oldPage = previous.pages[index]
+                  const section = oldPage && current.byId.get(oldPage.section.id)
+                  const retained = oldPage && newPages.get(oldPage.node)
+                  if (retained) queue.add(retained.index)
+                  else if (section && oldPage.localIndex < section.node.childCount) {
+                    queue.add(section.firstPage + oldPage.localIndex)
+                  }
+                }
               }
 
-              view.state.doc.forEach((page, _pos, index) => {
-                const previous = previousState.doc.maybeChild(index)
-                if (previous && !page.sameMarkup(previous)) {
-                  backwardFlowPages.add(index)
-                  dirtyPages.add(index)
+              const reflowAround = (page: PageEntry) => {
+                dirtyPages.add(page.index)
+                backwardFlowPages.add(page.index)
+                if (page.localIndex > 0) {
+                  dirtyPages.add(page.index - 1)
+                  backwardFlowPages.add(page.index - 1)
                 }
-              })
-
-              requestRun(currentPage - 1, currentPage)
+              }
+              for (const page of current.pages) {
+                const predecessor = current.pages[page.index - 1]
+                const oldSection = previous.byId.get(page.section.id)
+                const oldPage = oldPages.get(page.node)
+                const oldPredecessor = predecessor && oldPages.get(predecessor.node)
+                if (!oldPage ||
+                    (page.localIndex > 0 && oldPredecessor && oldPage.section !== oldPredecessor.section) ||
+                    (oldSection && page.localIndex === page.section.node.childCount - 1
+                      && page.section.node.childCount < oldSection.node.childCount)) {
+                  reflowAround(page)
+                }
+              }
+              requestRun()
             },
 
             destroy() {
@@ -861,6 +841,7 @@ const Pagination = Extension.create({
 })
 
 const DocumentCodeBlock = CodeBlock.extend({
+  marks: 'comment',
   addAttributes() {
     const inherited: Attributes = this.parent?.() ?? {}
     return {
@@ -903,35 +884,21 @@ const editor = useEditor({
     BlockIndentation,
     BlockFontSize,
     InlineTextStyle,
+    DocumentComment,
     PaginatedDocument,
+    DocumentSection,
+    sectionControls((id) => openSectionRename(id)),
     Page,
     Pagination,
   ],
-  content: {
-    type: 'doc',
-    content: [
-      {
-        type: 'page',
-        content: [
-          ...blockStyleOptions.map(({ value, label }) => ({
-            type: value === 'paragraph' ? 'paragraph' : 'heading',
-            ...(value === 'paragraph' ? {} : { attrs: { level: value } }),
-            content: [{ type: 'text', text: label }],
-          })),
-          {
-            type: 'table',
-            content: Array.from({ length: 10 }, () => ({
-              type: 'tableRow',
-              content: Array.from({ length: 10 }, () => ({
-                type: 'tableCell',
-                content: [{ type: 'paragraph' }],
-              })),
-            })),
-          },
-          { type: 'paragraph' },
-        ],
-      },
-    ],
+  content: sectionedContent({ type: 'doc' }),
+  onBeforeCreate: ({ editor: instance }) => {
+    try {
+      const saved = readLocalDocument(instance.schema)
+      if (saved) instance.setOptions({ content: saved })
+    } catch {
+      ElMessage.warning('无法读取已保存的文档，已打开空白页。')
+    }
   },
   editorProps: {
     transformCopied: removePageWrappersFromClipboard,
@@ -942,6 +909,7 @@ const editor = useEditor({
   },
   onCreate: ({ editor: editorInstance }) => {
     syncCurrentPage(editorInstance)
+    syncSection(editorInstance)
     syncBlockIndent(editorInstance)
     syncBlockStyle(editorInstance)
     syncInlineFormats(editorInstance)
@@ -949,6 +917,7 @@ const editor = useEditor({
   },
   onTransaction: ({ editor: editorInstance }) => {
     syncCurrentPage(editorInstance)
+    syncSection(editorInstance)
     syncBlockIndent(editorInstance)
     syncBlockStyle(editorInstance)
     syncInlineFormats(editorInstance)
@@ -1315,6 +1284,97 @@ const redo = () => {
 
 const getJSON = () => editor.value?.getJSON()
 
+const syncSection = (instance: Editor) => {
+  const section = currentSection(instance)
+  if (!section) return
+  const status = {
+    number: section.index + 1,
+    name: String(section.node.attrs.name ?? ''),
+    total: documentLayout(instance.state.doc).sections.length,
+    canSplit: sectionBlockBoundary(instance.state.selection.$head) !== null,
+  }
+  const previous = sectionStatus.value
+  if (status.number === previous.number && status.name === previous.name &&
+      status.total === previous.total && status.canSplit === previous.canSplit) return
+  sectionStatus.value = status
+  emit('sectionChange', status)
+}
+
+const openSectionRename = (id: string) => {
+  const instance = editor.value
+  const section = instance && documentLayout(instance.state.doc).byId.get(id)
+  if (!section) return
+  sectionRenameId.value = id
+  sectionNameDraft.value = String(section.node.attrs.name ?? '')
+  pendingSectionName.value = null
+  sectionRenameVisible.value = true
+}
+
+const confirmSectionRename = () => {
+  pendingSectionName.value = sectionNameDraft.value.trim()
+  sectionRenameVisible.value = false
+}
+
+const finishSectionRename = () => {
+  const instance = editor.value
+  const id = sectionRenameId.value
+  const name = pendingSectionName.value
+  sectionRenameId.value = null
+  pendingSectionName.value = null
+  if (!instance || !id || name === null) return
+  const section = documentLayout(instance.state.doc).byId.get(id)
+  if (section && name !== section.node.attrs.name) {
+    instance.view.dispatch(closeHistory(instance.state.tr.setNodeAttribute(section.pos, 'name', name)))
+  }
+}
+
+const runSectionAction = (action: SectionAction) => {
+  const instance = editor.value
+  if (!instance) return
+  const { state, view } = instance
+  const section = currentSection(instance)
+  const sectionType = state.schema.nodes.section
+  if (!section || !sectionType) return
+  if (action === 'rename') {
+    openSectionRename(section.id)
+    return
+  }
+
+  const tr = closeHistory(state.tr)
+  let focus: number
+  if (action === 'merge') {
+    if (section.index === 0 || !canJoin(tr.doc, section.pos)) return
+    tr.join(section.pos)
+    focus = tr.mapping.map(state.selection.head)
+  } else {
+    const page = pageAtPosition(state.doc, state.selection.head)
+    const attributes = { id: newSectionId(), name: '' }
+    const after = section.pos + section.node.nodeSize
+
+    if (action === 'insert') {
+      tr.insert(after, sectionType.create(attributes, emptyPage(state.doc, section.node.lastChild)))
+      focus = after + 2
+    } else {
+      const boundary = sectionBlockBoundary(state.selection.$head)
+      if (!page || boundary === null) return
+      const localOffset = boundary - page.pos - 1
+      const left = section.node.children.slice(0, page.localIndex)
+      if (localOffset > 0) left.push(page.node.copy(page.node.content.cut(0, localOffset)))
+      if (!left.length) left.push(emptyPage(state.doc, page.node))
+      const right = [page.node.copy(page.node.content.cut(localOffset)), ...section.node.children.slice(page.localIndex + 1)]
+      const previous = section.node.copy(Fragment.fromArray(left))
+      const next = sectionType.create(attributes, right)
+      tr.replaceWith(section.pos, after, [previous, next])
+      focus = section.pos + previous.nodeSize + 2
+      retainCommentDraftOnMove(tr, boundary, after - 1, focus)
+    }
+  }
+
+  tr.setSelection(Selection.near(tr.doc.resolve(focus)))
+  view.dispatch(tr.scrollIntoView())
+  view.focus()
+}
+
 const toggleInlineFormat = (format: InlineFormat) => {
   const instance = editor.value
   if (!instance) return
@@ -1322,7 +1382,7 @@ const toggleInlineFormat = (format: InlineFormat) => {
 }
 
 defineExpose({
-  getJSON, undo, redo, setBlockStyle, setBlockFontSize, toggleInlineFormat,
+  getJSON, undo, redo, runSectionAction, setBlockStyle, setBlockFontSize, toggleInlineFormat,
   setCurrentPageOrientation, setCurrentPageMargins, insertTable,
   toggleTableNumbered, showTableBorders, showTableColumnSettings, alignTableCells, setTableCellLine,
 })
@@ -1334,6 +1394,7 @@ defineExpose({
     :class="{
       'is-ribbon-panel-pinned': ribbonPanelPinned,
       'is-table-gridlines-hidden': !showTableGridlines,
+      'has-comment-lane': commentLaneVisible,
     }"
     :style="{
       '--document-width': `${documentWidth}mm`,
@@ -1359,14 +1420,41 @@ defineExpose({
 
     <main class="document-workspace">
       <EditorContent v-if="editor" :editor="editor" class="paginated-editor" />
+      <WordComments v-if="editor" :editor="editor" @lane-change="commentLaneVisible = $event" />
     </main>
+    <div class="word-section-status" :title="sectionLabel(sectionStatus.number, sectionStatus.name)">
+      <span>{{ sectionLabel(sectionStatus.number, sectionStatus.name) }}</span>
+      <span>共 {{ sectionStatus.total }} 节</span>
+    </div>
+    <ElDialog
+      v-model="sectionRenameVisible"
+      title="重命名节"
+      width="min(400px, calc(100vw - 32px))"
+      align-center
+      append-to-body
+      :close-on-click-modal="false"
+      @opened="sectionNameInput?.select()"
+      @closed="finishSectionRename"
+    >
+      <ElInput
+        ref="sectionNameInput"
+        v-model="sectionNameDraft"
+        aria-label="节名称"
+        placeholder="节名称"
+        @keydown.enter.prevent="confirmSectionRename"
+      />
+      <template #footer>
+        <ElButton @click="sectionRenameVisible = false">取消</ElButton>
+        <ElButton type="primary" @click="confirmSectionRename">确定</ElButton>
+      </template>
+    </ElDialog>
     <TableBordersDialog ref="tableBordersDialog" :apply="applyTableBorders" @closed="closeTableBorders" />
     <TableColumnSettingsDialog
       ref="tableColumnDialog"
       :apply="applyTableColumnSettings"
       @closed="closeTableColumnSettings"
     />
-    <WordTableContextMenu v-if="editor" :editor="editor" />
+    <WordEditorContextMenu v-if="editor" :editor="editor" />
     <WordTableInsertControls v-if="editor" :editor="editor" />
     <WordTableResizeControls
       v-if="editor"

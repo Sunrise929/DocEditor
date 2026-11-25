@@ -15,6 +15,7 @@ import type { TableCellAlignment, TableCellAlignmentState } from '../WordEditor/
 import { blockStyleOptions, type DocumentBlockStyle } from '../WordEditor/documentHeading'
 import type { InlineFormat, InlineFormatState } from '../WordEditor/inlineFormatting'
 import { pageDimensions, samePageMargins, type PageMargins, type PageOrientation } from '../WordEditor/pageGeometry'
+import type { SectionAction, SectionStatus } from '../WordEditor/documentSections'
 import type { TableSize } from '../WordEditor/tableSize'
 
 defineOptions({ name: 'WordRibbon' })
@@ -24,6 +25,7 @@ const showTableGridlines = defineModel<boolean>('showTableGridlines', { required
 const panelPinned = defineModel<boolean>('panelPinned', { default: true })
 
 const props = defineProps<{
+  sectionStatus: SectionStatus
   blockStyle: DocumentBlockStyle | null
   fontSize: number | null
   canSetFontSize: boolean
@@ -36,6 +38,7 @@ const props = defineProps<{
   pageMargins: PageMargins
 }>()
 const emit = defineEmits<{
+  sectionAction: [action: SectionAction]
   blockStyleSelect: [style: DocumentBlockStyle]
   fontSizeSelect: [size: number, focusEditor: boolean]
   inlineFormatToggle: [format: InlineFormat]
@@ -344,87 +347,111 @@ onBeforeUnmount(clearSingleClickTimer)
           @insert="emit('tableInsert', $event)"
         />
 
-        <section v-else-if="activeTab === '布局'" class="word-ribbon-group" aria-label="页面设置">
-          <div class="word-ribbon-group-content word-page-setup-controls">
-            <ElDropdown
-              trigger="click"
-              placement="bottom-start"
-              popper-class="word-margins-menu"
-              max-height="min(360px, 60dvh)"
-              :show-arrow="false"
-              @command="selectPageMargins"
-            >
-              <ElButton text class="word-page-setup-button word-margins-button">
-                <span class="word-margins-icon" aria-hidden="true"><span class="word-margins-guide" /></span>
-                <span class="word-page-setup-label">
-                  页边距
-                  <span class="word-style-chevron" aria-hidden="true" />
-                </span>
-              </ElButton>
-              <template #dropdown>
-                <ElDropdownMenu>
-                  <ElDropdownItem
-                    v-for="preset in marginPresets"
-                    :key="preset.label"
-                    :command="preset.label"
-                    class="word-margins-option"
-                    role="menuitemradio"
-                    :aria-checked="selectedMarginPreset === preset"
-                  >
-                    <span
-                      class="word-margin-preview"
-                      :style="{
-                        '--margin-preview-y': (preset.margins.marginTop / previewHeight * 100) + '%',
-                        '--margin-preview-x': (preset.margins.marginLeft / previewWidth * 100) + '%',
-                      }"
-                      aria-hidden="true"
-                    />
-                    <span>
-                      <span class="word-margin-preset-label">{{ preset.label }}</span>
-                      <span class="word-margin-preset-values">
-                        上下 {{ (preset.margins.marginTop / 10).toFixed(2) }} · 左右 {{ (preset.margins.marginLeft / 10).toFixed(2) }} cm
+        <template v-else-if="activeTab === '布局'">
+          <section class="word-ribbon-group" aria-label="页面设置">
+            <div class="word-ribbon-group-content word-page-setup-controls">
+              <ElDropdown
+                trigger="click"
+                placement="bottom-start"
+                popper-class="word-margins-menu"
+                max-height="min(360px, 60dvh)"
+                :show-arrow="false"
+                @command="selectPageMargins"
+              >
+                <ElButton text class="word-page-setup-button word-margins-button">
+                  <span class="word-margins-icon" aria-hidden="true"><span class="word-margins-guide" /></span>
+                  <span class="word-page-setup-label">
+                    页边距
+                    <span class="word-style-chevron" aria-hidden="true" />
+                  </span>
+                </ElButton>
+                <template #dropdown>
+                  <ElDropdownMenu>
+                    <ElDropdownItem
+                      v-for="preset in marginPresets"
+                      :key="preset.label"
+                      :command="preset.label"
+                      class="word-margins-option"
+                      role="menuitemradio"
+                      :aria-checked="selectedMarginPreset === preset"
+                    >
+                      <span
+                        class="word-margin-preview"
+                        :style="{
+                          '--margin-preview-y': (preset.margins.marginTop / previewHeight * 100) + '%',
+                          '--margin-preview-x': (preset.margins.marginLeft / previewWidth * 100) + '%',
+                        }"
+                        aria-hidden="true"
+                      />
+                      <span>
+                        <span class="word-margin-preset-label">{{ preset.label }}</span>
+                        <span class="word-margin-preset-values">
+                          上下 {{ (preset.margins.marginTop / 10).toFixed(2) }} · 左右 {{ (preset.margins.marginLeft / 10).toFixed(2) }} cm
+                        </span>
                       </span>
-                    </span>
-                  </ElDropdownItem>
-                  <ElDropdownItem command="custom" class="word-margins-custom" aria-haspopup="dialog" divided>
-                    自定义页边距…
-                  </ElDropdownItem>
-                </ElDropdownMenu>
-              </template>
-            </ElDropdown>
-            <ElDropdown
-              trigger="click"
-              placement="bottom-start"
-              popper-class="word-orientation-menu"
-              :show-arrow="false"
-              @command="selectPageOrientation"
-            >
-              <ElButton text class="word-page-setup-button word-orientation-button">
-                <span class="word-orientation-icon" aria-hidden="true" />
-                <span class="word-page-setup-label word-orientation-label">
-                  纸张方向
-                  <span class="word-style-chevron" aria-hidden="true" />
-                </span>
-              </ElButton>
-              <template #dropdown>
-                <ElDropdownMenu>
-                  <ElDropdownItem
-                    v-for="{ value, label } in orientationOptions"
-                    :key="value"
-                    :command="value"
-                    class="word-orientation-option"
-                    role="menuitemradio"
-                    :aria-checked="pageOrientation === value"
-                  >
-                    <span class="word-orientation-option-icon" :class="'is-' + value" aria-hidden="true" />
-                    {{ label }}
-                  </ElDropdownItem>
-                </ElDropdownMenu>
-              </template>
-            </ElDropdown>
-          </div>
-          <span class="word-ribbon-group-title">页面设置</span>
-        </section>
+                    </ElDropdownItem>
+                    <ElDropdownItem command="custom" class="word-margins-custom" aria-haspopup="dialog" divided>
+                      自定义页边距…
+                    </ElDropdownItem>
+                  </ElDropdownMenu>
+                </template>
+              </ElDropdown>
+              <ElDropdown
+                trigger="click"
+                placement="bottom-start"
+                popper-class="word-orientation-menu"
+                :show-arrow="false"
+                @command="selectPageOrientation"
+              >
+                <ElButton text class="word-page-setup-button word-orientation-button">
+                  <span class="word-orientation-icon" aria-hidden="true" />
+                  <span class="word-page-setup-label word-orientation-label">
+                    纸张方向
+                    <span class="word-style-chevron" aria-hidden="true" />
+                  </span>
+                </ElButton>
+                <template #dropdown>
+                  <ElDropdownMenu>
+                    <ElDropdownItem
+                      v-for="{ value, label } in orientationOptions"
+                      :key="value"
+                      :command="value"
+                      class="word-orientation-option"
+                      role="menuitemradio"
+                      :aria-checked="pageOrientation === value"
+                    >
+                      <span class="word-orientation-option-icon" :class="'is-' + value" aria-hidden="true" />
+                      {{ label }}
+                    </ElDropdownItem>
+                  </ElDropdownMenu>
+                </template>
+              </ElDropdown>
+            </div>
+            <span class="word-ribbon-group-title">页面设置</span>
+          </section>
+          <section class="word-ribbon-group" aria-label="分节">
+            <div class="word-ribbon-group-content">
+              <ElDropdown trigger="click" placement="bottom-start" @command="emit('sectionAction', $event)">
+                <ElButton text class="word-page-setup-button">
+                  <span class="word-section-icon" aria-hidden="true" />
+                  <span class="word-page-setup-label">
+                    分节
+                    <span class="word-style-chevron" aria-hidden="true" />
+                  </span>
+                </ElButton>
+                <template #dropdown>
+                  <ElDropdownMenu>
+                    <ElDropdownItem command="split" :disabled="!sectionStatus.canSplit">在此处分节</ElDropdownItem>
+                    <ElDropdownItem command="insert">在当前节后新建空节</ElDropdownItem>
+                    <ElDropdownItem command="merge" :disabled="sectionStatus.number === 1">与上一节合并</ElDropdownItem>
+                    <ElDropdownItem command="rename" divided>重命名当前节…</ElDropdownItem>
+                  </ElDropdownMenu>
+                </template>
+              </ElDropdown>
+            </div>
+            <span class="word-ribbon-group-title">分节</span>
+          </section>
+        </template>
       </div>
     </div>
     <PageMarginsDialog

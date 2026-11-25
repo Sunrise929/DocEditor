@@ -1,3 +1,4 @@
+import { forEachDocumentPage } from './documentSections'
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model'
 import { Plugin } from '@tiptap/pm/state'
 import { TableMap } from '@tiptap/pm/tables'
@@ -134,7 +135,7 @@ export const tableBorderPlugin = () => new Plugin<DecorationSet>({
   state: {
     init(_, { doc }) {
       const decorations: Decoration[] = []
-      doc.forEach((page, offset) => collectPagePerimeters(page, offset, decorations))
+      forEachDocumentPage(doc, (page, offset) => collectPagePerimeters(page, offset, decorations))
       return DecorationSet.create(doc, decorations)
     },
     apply(tr, previous) {
@@ -143,12 +144,12 @@ export const tableBorderPlugin = () => new Plugin<DecorationSet>({
 
       // Preserve decorations on untouched pages and only inspect changed page trees.
       const unchangedPages = new Map<number, ProseMirrorNode>()
-      tr.before.forEach((page, offset) => {
+      forEachDocumentPage(tr.before, (page, offset) => {
         const mapped = tr.mapping.mapResult(offset)
         if (!mapped.deleted) unchangedPages.set(mapped.pos, page)
       })
       const additions: Decoration[] = []
-      tr.doc.forEach((page, offset) => {
+      forEachDocumentPage(tr.doc, (page, offset) => {
         if (unchangedPages.get(offset) === page) return
         decorations = decorations.remove(decorations.find(offset + 1, offset + page.nodeSize - 1))
         collectPagePerimeters(page, offset, additions)
